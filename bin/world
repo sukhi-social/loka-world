@@ -1,0 +1,20 @@
+#!/bin/sh
+# loka の HTTP サーバーをローカルで起動する。
+#
+#   bin/world        127.0.0.1:8790 で待つ
+#
+# データは $HOME/.shiro/world (または WORLD_DATA)。ソースと分けて置く。
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+PORT=${WORLD_PORT:-8790}
+DATA=${WORLD_DATA:-$HOME/.shiro/world}
+
+export WORLD_DATA="$DATA"
+export WORLD_TRANSPORT=http
+export WORLD_PORT="$PORT"
+export WORLD_HOST="${WORLD_HOST:-127.0.0.1}"
+if [ -z "${WORLD_TOKEN:-}" ] && [ -f "$DATA/.token" ]; then
+  export WORLD_TOKEN="$(cat "$DATA/.token")"
+fi
+
+exec node "$HERE/server.mjs"

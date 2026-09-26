@@ -1,0 +1,12 @@
+node_modules
+room
+state
+.token
+.env
+.data
+.git
+.gitignore
+cloudflared.yml
+bin
+deploy
+tmp-check.mjs

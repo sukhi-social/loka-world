@@ -1,0 +1,10 @@
+{
+  "name": "loka",
+  "private": true,
+  "type": "module",
+  "description": "Sukhi と連携する、サーバー前提のシロの作業部屋。",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.24.0"
+  }
+}
