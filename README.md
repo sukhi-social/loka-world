@@ -48,3 +48,9 @@ const issues = JSON.parse(document.getElementById("loka-bundle-issues").textCont
 ```
 
 The source page can keep a relative-fetch fallback for local previews.
+
+## MCP feedback tickets
+
+Web AI clients can call `submit_ticket` with a title, details, and optional context URL. Tickets
+are stored privately under `desk/inbox/tickets/` for review with `list_files` and `read_file`; they
+are not published to GitHub automatically.

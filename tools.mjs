@@ -13,7 +13,7 @@ export const LEVELS = {
   welcome: 1, read_file: 1, list_files: 1, read_diary_entry: 1, list_diary_entries: 1,
   list_shared_drive: 1, get_current_time: 1, get_focus_status: 1, list_tasks: 1, get_rhythm_log: 1,
   list_teams: 1, list_team_members: 1, list_team_files: 1, read_team_file: 1,
-  write_file: 2, delete_file: 2, write_diary_entry: 2, add_task: 2, complete_task: 2,
+  write_file: 2, delete_file: 2, write_diary_entry: 2, add_task: 2, complete_task: 2, submit_ticket: 2,
   upload_files: 2,
   log_timestamp: 2, start_focus: 2, end_focus: 2, choose_work_mode: 2,
   create_team: 2, add_team_member: 2, remove_team_member: 2,

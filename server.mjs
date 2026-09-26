@@ -19,6 +19,7 @@
 //   move_to_shared_drive / list_shared_drive / access_full_filesystem / reset_context
 
 import { createServer as createHttpServer } from "node:http";
+import { randomUUID } from "node:crypto";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -68,6 +69,7 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
         "机(desk)は自由な作業スペースで、計画・メモ・コード・データ(JSON/CSV)・HTML まで、種類を問わず write_file で置ける。" +
         "read_file / list_files で読み返せ、作ったものは消えずに残る。新しく繋いだら、まず list_files で机を見て、続きから始める。" +
         "完成したら achievements へ、人に見せてよければ move_to_shared_drive で共有へ。日記と集中の記録は、作業を健やかに続けるためのもの。" +
+        "Web AI からの feedback は submit_ticket で desk/inbox/tickets/ に非公開で届く。GitHub へは自動公開しない。" +
         "接続したら、まず welcome を呼ぶこと。ついで、あなたのユーザーに「loka を使いますか?」と尋ね、返事を待つこと。" +
         "使わないと言われたら、何も書かずに、そっと終えてよい。使うと言われたら、いま取りかかっている作業を机に置き、ここで進めること。",
     },
@@ -208,6 +210,7 @@ HTML を書くときは、まず library/loka-design.md を読むと、loka の�
   場所       move_to_shared_drive / list_shared_drive / access_full_filesystem
   チーム     create_team / list_teams / add_team_member / share_to_team / list_team_files / read_team_file
   日記       write_diary_entry / read_diary_entry / list_diary_entries
+  チケット   submit_ticket(非公開 inbox へ。GitHub には出さない)
   呼吸       reset_context(今日の日記が無いと、起きない)
   時間       get_current_time / add_task / list_tasks / complete_task
   集中       start_focus / end_focus / get_focus_status / choose_work_mode
@@ -397,6 +400,42 @@ ${closing}
       },
     },
     async ({ team, path }) => asText(await roomFor(["team-read", "--team", team, "--path", path])),
+  );
+
+  reg(
+    "submit_ticket",
+    {
+      description:
+        "Web AI などの MCP クライアントから feedback / bug / idea をチケットとして受け取る。" +
+        "desk/inbox/tickets/ に非公開で保存し、GitHub など外部には公開しない。持ち主が read_file / list_files で確認する。",
+      inputSchema: {
+        title: z.string().trim().min(1).max(160).refine((value) => !/[\r\n]/.test(value), "一行のタイトルを指定してください。"),
+        details: z.string().trim().min(1).max(20_000).describe("起きたこと、期待すること、再現手順や提案など。"),
+        kind: z.enum(["feedback", "bug", "idea"]).default("feedback"),
+        source_url: z.string().url().max(2048).refine((value) => /^https?:\/\//.test(value), "http(s) URL を指定してください。").optional(),
+      },
+    },
+    async ({ title, details, kind, source_url }) => {
+      const receivedAt = new Date().toISOString();
+      const id = `ticket-${receivedAt.replace(/[:.]/g, "-")}-${randomUUID()}`;
+      const content = [
+        `# ${title}`,
+        "",
+        `- Ticket: ${id}`,
+        `- Received: ${receivedAt}`,
+        `- From: ${account}`,
+        `- Type: ${kind}`,
+        "- Status: new",
+        ...(source_url ? [`- Context: ${source_url}`] : []),
+        "",
+        "## Details",
+        "",
+        details,
+        "",
+      ].join("\n");
+      const saved = await roomFor(["write", "--path", `desk/inbox/tickets/${id}.md`], content);
+      return asText({ ticket_id: id, path: saved.path, received_at: receivedAt, status: "received", public: false });
+    },
   );
 
   reg(
