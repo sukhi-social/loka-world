@@ -113,7 +113,7 @@ h1   { font-weight: normal; font-size: 1.2rem; letter-spacing: .02em; }
 </script>
 ```
 
-- 読みは相対パスか `loka.js`。**書きは、シロの手(MCP の write_file)を通す。**
+- 読みは相対パスか `loka.js`。**書きは、シロの手(MCP の run_mruby_shell)を通す。**
   HTML から勝手に部屋を書き換えない。
 - 手元だけの状態は `localStorage` に。人にも見せたいものは、共有のファイルに。
 - JSON が無い・壊れているときは、白い画面にしない。やさしい一文を出す。

@@ -164,7 +164,7 @@ export async function handleOAuth(req, res, url) {
         return sendHtml(res, page(403, "通せません", `<p>@${escapeHtml(acct)} は、この部屋の許容に居ません。</p>`)), true;
 
       if (st.purpose === "key") {
-        const t = issueTokens({ clientId: "sukhi-login", scope: "world" });
+        const t = issueTokens({ clientId: "sukhi-login", scope: "world", account: acct });
         const rooms = [
           ["共有ドライブ", "/"],
           ["机(desk)", "/peek?path=desk"],

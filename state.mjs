@@ -13,4 +13,5 @@ export const state = (args, input, account = ownerAccount()) =>
   runRuby("state.rb", args, input, {
     WORLD_ACCOUNT: account,
     WORLD_STATE: join(STATE_DIR, "users", account),
+    TZ: process.env.WORLD_TIMEZONE ?? "Asia/Seoul",
   });

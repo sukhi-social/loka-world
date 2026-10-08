@@ -42,7 +42,7 @@ module State
 
   def read_json(file, fallback = nil)
     return fallback unless File.exist?(file)
-    JSON.parse(File.read(file))
+    JSON.parse(File.read(file, encoding: "UTF-8"))
   rescue JSON::ParserError
     fallback
   end
@@ -91,6 +91,60 @@ module State
     rhythm_add("focus_end", task: cur["task"], took_minutes: took, summary: summary)
     { task: cur["task"], started_at: cur["started_at"], ended_at: ended.iso8601, took_minutes: took, summary: summary,
       message: "集中を終えた。#{summary ? "「#{summary}」" : "おつかれ。"}" }
+  end
+
+  # ── ポモドーロ ──────────────────────────────────────────────────────────
+  #
+  # 動く時計は持たない。始めた時刻から、いまが「働く / 休む」のどちらかを数えて出す。
+  # loka_context に毎回載るので、道具を呼ぶたびに、いまの区切りが目に入る。
+  # 4 回目の休みは長い。
+
+  def pomodoro_file = path("pomodoro.json")
+
+  def pomodoro_start(task: nil, work: nil, rest: nil, long_rest: nil)
+    raise Denied, "もう始めている。止めてから、やり直す。" if read_json(pomodoro_file, nil)
+    rec = {
+      "task" => task, "started_at" => Time.now.iso8601,
+      "work" => (work || 25).to_i, "rest" => (rest || 5).to_i, "long_rest" => (long_rest || 15).to_i,
+    }
+    raise Denied, "分は 1 以上で" if rec.values_at("work", "rest", "long_rest").any? { |m| m < 1 }
+    write_json(pomodoro_file, rec)
+    rhythm_add("pomodoro_start", task: task, work: rec["work"], rest: rec["rest"])
+    pomodoro
+  end
+
+  def pomodoro
+    rec = read_json(pomodoro_file, nil)
+    return nil unless rec
+    left = (Time.now - Time.parse(rec["started_at"])) / 60.0
+    round = 1
+    loop do
+      rest = (round % 4).zero? ? rec["long_rest"] : rec["rest"]
+      if left < rec["work"]
+        return pomodoro_view(rec, "work", round, rec["work"] - left,
+                             "働く時間。あと#{(rec["work"] - left).ceil}分。区切りまで、ここに居る。")
+      end
+      left -= rec["work"]
+      if left < rest
+        return pomodoro_view(rec, "rest", round, rest - left,
+                             "休む時間。あと#{(rest - left).ceil}分。手を止めて、離れていい。長いジョブを走らせていたなら、待つのにちょうどいい。")
+      end
+      left -= rest
+      round += 1
+    end
+  end
+
+  def pomodoro_view(rec, phase, round, remaining, message)
+    { "phase" => phase, "round" => round, "remaining_minutes" => remaining.round(1),
+      "task" => rec["task"], "message" => message }
+  end
+
+  def pomodoro_stop
+    cur = pomodoro
+    raise Denied, "ポモドーロは始めていない。" unless cur
+    File.delete(pomodoro_file)
+    rhythm_add("pomodoro_stop", task: cur["task"], round: cur["round"], phase: cur["phase"])
+    { stopped: true, round: cur["round"], message: "ポモドーロを止めた。おつかれ。" }
   end
 
   # ── 作業モード ──────────────────────────────────────────────────────────
@@ -145,6 +199,10 @@ module State
     end
     list = state.values.sort_by { |t| t[:id] }
     include_done ? list : list.reject { |t| t[:done] }
+  end
+
+  def context
+    { current_time: now, focus_status: focus || { focusing: false }, todos: task_list, pomodoro: pomodoro }
   end
 
   # ── リズム ──────────────────────────────────────────────────────────────
@@ -214,7 +272,12 @@ module State
     flags
   end
 
-  def flag(flags, key) = (flags[key] unless flags[key] == true)
+  def flag(flags, key)
+    value = flags[key] unless flags[key] == true
+    return value unless value.is_a?(String)
+
+    value.dup.force_encoding(Encoding::UTF_8).scrub
+  end
   def present(flags, key) = flags.key?(key)
 
   def run(argv)
@@ -222,9 +285,14 @@ module State
     flags = parse(argv)
     case cmd
     when "now" then now
+    when "context" then context
     when "focus" then focus || { focusing: false }
     when "focus-start" then focus_start(task: flag(flags, "task"), minutes: flag(flags, "minutes"))
     when "focus-end" then focus_end(summary: flag(flags, "summary"))
+    when "pomodoro" then pomodoro || { phase: nil }
+    when "pomodoro-start"
+      pomodoro_start(task: flag(flags, "task"), work: flag(flags, "work"), rest: flag(flags, "rest"), long_rest: flag(flags, "long-rest"))
+    when "pomodoro-stop" then pomodoro_stop
     when "work-mode"
       present(flags, "mode") ? set_work_mode(flag(flags, "mode")) : { mode: work_mode }
     when "task-add" then task_add(content: flag(flags, "content"), due: flag(flags, "due"))
@@ -237,12 +305,14 @@ module State
   end
 end
 
-begin
-  puts JSON.generate(State.run(ARGV.dup))
-rescue State::Denied => e
-  puts JSON.generate(error: e.message)
-  exit 1
-rescue StandardError => e
-  puts JSON.generate(error: "#{e.class}: #{e.message}")
-  exit 1
+if __FILE__ == $0
+  begin
+    puts JSON.generate(State.run(ARGV.dup))
+  rescue State::Denied => e
+    puts JSON.generate(error: e.message)
+    exit 1
+  rescue StandardError => e
+    puts JSON.generate(error: "#{e.class}: #{e.message}")
+    exit 1
+  end
 end

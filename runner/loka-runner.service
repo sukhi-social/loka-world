@@ -1,0 +1,13 @@
+# lokarun の systemd ユーザーサービス(~/.config/systemd/user/)。runner/install.sh が置く。
+[Unit]
+Description=loka runner (rootless Podman jobs)
+
+[Service]
+Environment=LOKA_RUNNER_RUN=/run/loka-runner
+Environment=LOKA_RUNNER_DATA=%h/jobs
+ExecStart=/usr/bin/python3 %h/runner/loka_runner.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

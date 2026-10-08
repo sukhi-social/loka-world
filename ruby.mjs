@@ -11,10 +11,15 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 export function runRuby(script, args = [], input, extraEnv) {
   const file = join(HERE, "ruby", script);
+  const pathEnv = process.env.PATH ? `/opt/homebrew/bin:${process.env.PATH}` : "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
   return new Promise((resolve, reject) => {
     const child = spawn("ruby", [file, ...args], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+      env: {
+        ...process.env,
+        PATH: pathEnv,
+        ...(extraEnv ?? {}),
+      },
     });
     let out = "";
     let err = "";

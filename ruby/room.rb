@@ -42,7 +42,7 @@ module Room
   PLACES = [DESK, LIBRARY, ACHIEVEMENTS, SHARED].freeze
   VISIBILITIES = [PUBLIC, PRIVATE].freeze
   # 手を動かしてよい場所。日記は diary-write を通す(共有は、直接書いてもよい)。
-  WORKSPACE = [DESK, LIBRARY, ACHIEVEMENTS, SHARED].freeze
+  WORKSPACE = [DESK, LIBRARY, ACHIEVEMENTS, SHARED, DIARY].freeze
 
   # 配信するときの種類。ここに無いものは octet-stream。
   MIME = {
@@ -124,7 +124,9 @@ module Room
     File.rename(tmp, registry_path)
   end
 
-  def team_root(tid) = File.join(base, "teams", tid)
+  def team_root(tid)
+    File.join(base, "teams", tid)
+  end
 
   def team_box(tid)
     @team_boxes ||= {}
@@ -232,52 +234,75 @@ module Room
     File.join(DIARY, visibility, "#{date}.md")
   end
 
-  def diary_write(visibility:, body:, date: nil, mood: nil, tags: nil)
-    raise Hako::Denied, "visibility は #{VISIBILITIES.join(" / ")} のどちらか" unless VISIBILITIES.include?(visibility)
+def diary_write(visibility:, body:, date: nil, mood: nil, tags: nil)
+  raise Hako::Denied, "visibility は #{VISIBILITIES.join(" / ")} のどちらか" unless VISIBILITIES.include?(visibility)
     date ||= Date.today.iso8601
     raise Hako::Denied, "date は YYYY-MM-DD の形で" unless date.to_s.match?(/\A\d{4}-\d{2}-\d{2}\z/)
 
-    meta = { "date" => date, "wrote_at" => Time.now.iso8601 }
-    meta["mood"] = mood if mood
-    list = tags.is_a?(Array) ? tags : tags.to_s.split(",").map(&:strip).reject(&:empty?)
-    meta["tags"] = list unless list.empty?
+  body_str = body.to_s.dup.force_encoding(Encoding::UTF_8).scrub
+  meta = { "date" => date, "wrote_at" => Time.now.iso8601 }
+  meta["mood"] = mood if mood
+  list = tags.is_a?(Array) ? tags : tags.to_s.split(",").map(&:strip).reject(&:empty?)
+  meta["tags"] = list unless list.empty?
 
-    content = "#{YAML.dump(meta)}---\n\n#{body.to_s.strip}\n"
-    written = box.write(diary_path(date, visibility), content)
-    written.merge(date: date, visibility: visibility)
+  content = "#{YAML.dump(meta)}---\n\n#{body_str.strip}\n"
+  written = box.write(diary_path(date, visibility), content)
+  written.merge(date: date, visibility: visibility)
+end
+
+def split_frontmatter(content)
+  m = content.match(/\A---\r?\n(.*?)\r?\n---\r?\n\n?(.*)\z/m)
+  return [{}, content] unless m
+  meta = YAML.safe_load(m[1], permitted_classes: [Date, Time]) || {}
+  [meta, m[2]]
+rescue StandardError
+  [{}, content]
+end
+
+def diary_read(date: nil, visibility: nil)
+  visibility = visibility.to_s unless visibility.nil?
+  if visibility.nil? || visibility.empty?
+    if date
+      visibility = File.file?(box.resolve(diary_path(date, PRIVATE))) ? PRIVATE : PUBLIC
+    else
+      p_latest = diary_list(visibility: PRIVATE).map { |e| e[:date] }.max
+      visibility = p_latest ? PRIVATE : PUBLIC
+    end
   end
+  raise Hako::Denied, "visibility は #{VISIBILITIES.join(" / ")} のどちらか" unless VISIBILITIES.include?(visibility)
 
-  def split_frontmatter(content)
-    m = content.match(/\A---\n(.*?)\n---\n\n?(.*)\z/m)
-    return [{}, content] unless m
-    meta = YAML.safe_load(m[1], permitted_classes: [Date, Time]) || {}
-    [meta, m[2]]
-  end
-
-  def diary_read(date:, visibility:)
-    raise Hako::Denied, "visibility は #{VISIBILITIES.join(" / ")} のどちらか" unless VISIBILITIES.include?(visibility)
-    path = diary_path(date, visibility)
-    got = box.cat(path)
-    meta, body = split_frontmatter(got[:content])
-    { date: date, visibility: visibility, path: path, meta: meta, body: body, truncated: got[:truncated] }
-  end
-
-  def diary_list(visibility:, from: nil, to: nil)
-    raise Hako::Denied, "visibility は #{VISIBILITIES.join(" / ")} のどちらか" unless VISIBILITIES.include?(visibility)
-    dir = File.join(DIARY, visibility)
-    entries =
-      box.ls(dir)
-        .select { |e| e[:type] == "file" && e[:name].match?(/\A\d{4}-\d{2}-\d{2}\.md\z/) }
-        .map { |e| e[:name].sub(/\.md\z/, "") }
-        .select { |d| (from.nil? || d >= from) && (to.nil? || d <= to) }
-        .sort
-    entries.map do |d|
-      meta, = split_frontmatter(box.cat(diary_path(d, visibility))[:content])
-      { date: d, mood: meta["mood"], tags: meta["tags"] || [] }
+  if date.nil? || date.to_s.empty?
+    today_path = diary_path(Date.today.iso8601, visibility)
+    if File.file?(box.resolve(today_path))
+      date = Date.today.iso8601
+    else
+      latest = diary_list(visibility: visibility).map { |e| e[:date] }.max
+      date = latest || Date.today.iso8601
     end
   end
 
-  # ── 場所 ────────────────────────────────────────────────────────────────
+  path = diary_path(date, visibility)
+  got = box.cat(path)
+  meta, body = split_frontmatter(got[:content])
+  { date: date, visibility: visibility, path: path, meta: meta, body: body, content: body, text: body, truncated: got[:truncated] }
+end
+
+def diary_list(visibility:, from: nil, to: nil)
+  raise Hako::Denied, "visibility は #{VISIBILITIES.join(" / ")} のどちらか" unless VISIBILITIES.include?(visibility)
+  dir = File.join(DIARY, visibility)
+  entries =
+    box.ls(dir)
+      .select { |e| e[:type] == "file" && e[:name].match?(/\A\d{4}-\d{2}-\d{2}\.md\z/) }
+      .map { |e| e[:name].sub(/\.md\z/, "") }
+      .select { |d| (from.nil? || d >= from) && (to.nil? || d <= to) }
+      .sort
+  entries.map do |d|
+    meta, body = split_frontmatter(box.cat(diary_path(d, visibility))[:content])
+    { date: d, mood: meta["mood"], tags: meta["tags"] || [], body: body, content: body }
+  end
+end
+
+# ── 場所 ────────────────────────────────────────────────────────────────
 
   def share(item_path:, note: nil)
     raise Hako::Denied, "item_path が空" if item_path.to_s.empty?
@@ -321,6 +346,40 @@ module Room
     box.write(workspace!(path), content.to_s)
   end
 
+  def run_mruby_shell(code:, paths:, cwd: ".")
+    selected = Array(paths).map { |path| mruby_scope!(path) }
+    working = cwd.to_s == "." ? "." : mruby_scope!(cwd)
+    box.run_mruby_shell(code, paths: selected, cwd: working)
+  end
+
+  # 長い処理を裏で走らせる。場所は desk/<project> の中だけ。
+  def job_start(cmd:, project:, minutes: nil, network: "none", memory: "1g")
+    dir = workspace!(project)
+    parts = dir.split("/")
+    raise Hako::Denied, "走らせられるのは desk/<project> の中だけ" unless parts.first == DESK && parts.length >= 2
+    box.job_start(cmd, cwd: dir, minutes: minutes, network: network, memory: memory)
+  end
+
+  def job_status(id: nil, since: nil)
+    return { jobs: box.job_list } if id.nil?
+    box.job_status(id, since: since)
+  end
+
+  def job_stop(id:)
+    box.job_stop(id)
+  end
+
+  def mruby_scope!(path)
+    value = path.to_s
+    parts = value.split("/", -1)
+    if value.empty? || value.start_with?("/") || parts.any? { |part| part.empty? || part == "." || part == ".." }
+      raise Hako::Denied, "path の形が不正: #{value}"
+    end
+    return value if parts.first == ".trash"
+
+    workspace!(value)
+  end
+
   # 窓口(人間)からのアップロード。中身は base64 で受け取り、バイトのまま置く
   # (画像や PDF も、文字に直さずそのまま)。行き先は workspace! が見張る。
   def upload(path:)
@@ -351,9 +410,14 @@ module Room
 
   def workspace!(path)
     raise Hako::Denied, "path が空" if path.to_s.empty?
-    top = path.to_s.split("/").first
+    value = path.to_s
+    parts = value.split("/", -1)
+    if value.start_with?("/") || parts.any? { |part| part.empty? || part == "." || part == ".." }
+      raise Hako::Denied, "path の形が不正: #{value}"
+    end
+    top = parts.first
     raise Hako::Denied, "手を動かせるのは #{WORKSPACE.join(" / ")} の下だけ" unless WORKSPACE.include?(top)
-    path.to_s
+    value
   end
 
   def mime_for(path)
@@ -441,7 +505,12 @@ module Room
     [flags, pos]
   end
 
-  def flag(flags, key) = (flags[key] unless flags[key] == true)
+  def flag(flags, key)
+    value = flags[key] unless flags[key] == true
+    return value unless value.is_a?(String)
+
+    value.dup.force_encoding(Encoding::UTF_8).scrub
+  end
 
   def run(argv)
     ensure_structure
@@ -452,22 +521,22 @@ module Room
       { ok: true, root: root, places: PLACES }
     when "diary-write"
       diary_write(
-        visibility: flags["visibility"],
-        body: $stdin.read,
-        date: (flags["date"] unless flags["date"] == true),
-        mood: (flags["mood"] unless flags["mood"] == true),
-        tags: (flags["tags"] unless flags["tags"] == true),
+        visibility: flag(flags, "visibility"),
+        body: $stdin.read.to_s.dup.force_encoding(Encoding::UTF_8).scrub,
+        date: flag(flags, "date"),
+        mood: flag(flags, "mood"),
+        tags: flag(flags, "tags"),
       )
     when "diary-read"
       diary_read(
-        date: (flags["date"] unless flags["date"] == true),
-        visibility: flags["visibility"],
+        date: flag(flags, "date"),
+        visibility: flag(flags, "visibility"),
       )
     when "diary-list"
       diary_list(
-        visibility: flags["visibility"],
-        from: (flags["from"] unless flags["from"] == true),
-        to: (flags["to"] unless flags["to"] == true),
+        visibility: (flag(flags, "visibility") || "private"),
+        from: flag(flags, "from"),
+        to: flag(flags, "to"),
       )
     when "shared"
       { entries: shared }
@@ -484,6 +553,17 @@ module Room
       )
     when "write"
       write_file(path: (flags["path"] unless flags["path"] == true), content: $stdin.read)
+    when "mruby-shell"
+      request = JSON.parse($stdin.read)
+      run_mruby_shell(code: request.fetch("code"), paths: request.fetch("paths"), cwd: request.fetch("cwd", "."))
+    when "job-start"
+      request = JSON.parse($stdin.read)
+      job_start(cmd: request.fetch("cmd"), project: request.fetch("project"), minutes: request["minutes"],
+                network: request.fetch("network", "none"), memory: request.fetch("memory", "1g"))
+    when "job-status"
+      job_status(id: flag(flags, "id"), since: flag(flags, "since"))
+    when "job-stop"
+      job_stop(id: flag(flags, "id"))
     when "upload"
       upload(path: flag(flags, "path"))
     when "rm"
@@ -518,13 +598,15 @@ module Room
   end
 end
 
-begin
-  result = Room.run(ARGV.dup)
-  puts JSON.generate(result)
-rescue Hako::Denied => e
-  puts JSON.generate(error: e.message)
-  exit 1
-rescue StandardError => e
-  puts JSON.generate(error: "#{e.class}: #{e.message}")
-  exit 1
+if __FILE__ == $0
+  begin
+    result = Room.run(ARGV.dup)
+    puts JSON.generate(result)
+  rescue Hako::Denied => e
+    puts JSON.generate(error: e.message)
+    exit 1
+  rescue StandardError => e
+    puts JSON.generate(error: "#{e.class}: #{e.message}")
+    exit 1
+  end
 end

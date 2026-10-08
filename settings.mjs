@@ -1,7 +1,7 @@
 // アカウントごとの好み。いまは「読み取り専用と申告する(確認を省く)道具」だけ。
 //
 // loka.f3liz.casa の設定ページから選ぶ。state/settings.json に一つ。
-//   { "kuro43_": { "readonly": ["log_timestamp", "write_file"] }, ... }
+//   { "kuro43_": { "readonly": ["log_timestamp", "run_mruby_shell"] }, ... }
 //
 // これは申告であって、鍵ではない。印をつけた道具は、readOnlyHint を尊重する
 // クライアントで、確認なしに走るようになる。

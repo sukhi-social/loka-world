@@ -15,8 +15,7 @@
 //   - stdio(既定)               : ローカルの Claude Code / opencode から。
 //   - http(WORLD_TRANSPORT=http): Web の AI から。状態は /room にあるので stateless。
 //
-// 道具(七つ): write_diary_entry / read_diary_entry / list_diary_entries /
-//   move_to_shared_drive / list_shared_drive / access_full_filesystem / reset_context
+// 道具: run_mruby_shell / diary / shared drive / teams / tasks / focus / external reads
 
 import { createServer as createHttpServer } from "node:http";
 import { randomUUID } from "node:crypto";
@@ -34,12 +33,20 @@ import { handlePortal } from "./portal.mjs";
 import { room } from "./room.mjs";
 import { readonlyTools as accountReadonlyTools } from "./settings.mjs";
 import { state } from "./state.mjs";
+import { withToolContext } from "./tool-context.mjs";
 import { LEVELS, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
 import { originOf, sendJson } from "./web.mjs";
 
-const asText = (value) => ({
-  content: [{ type: "text", text: JSON.stringify(value, null, 1) }],
-});
+const asText = (value) => {
+  const structured =
+    value && typeof value === "object"
+      ? (Array.isArray(value) ? { result: value } : { ...value })
+      : { value };
+  return {
+    content: [{ type: "text", text: JSON.stringify(value, null, 1) }],
+    structuredContent: structured,
+  };
+};
 
 const visibility = z
   .enum(["public", "private"])
@@ -66,8 +73,12 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
       // 接続したモデルに渡る、短い案内。ここが「使いますか?」と尋ねる場所。
       instructions:
         "ここは「loka ── シロの部屋」。作業をする場所。速さより健やかさを大切にする。" +
-        "机(desk)は自由な作業スペースで、計画・メモ・コード・データ(JSON/CSV)・HTML まで、種類を問わず write_file で置ける。" +
-        "read_file / list_files で読み返せ、作ったものは消えずに残る。新しく繋いだら、まず list_files で机を見て、続きから始める。" +
+        "机(desk)は自由な作業スペースで、計画・メモ・コード・データ(JSON/CSV)・HTML まで置ける。" +
+        "ファイル作業は run_mruby_shell で、指定した机・書庫・成果・共有の範囲を読み、整える。" +
+        "置き場所は PARA を目安にする。案件は一案件一フォルダーで desk/<project>/ にまとめ、案件横断の参考は library/、完了した成果は achievements/ へ。" +
+        "shared_drive/ は本人が渡すと決めたものだけ。正本を複数の場所に置いて重ねて更新しない。" +
+        "すべての道具の返答には、その時点の時刻・集中状態・未完了タスク(loka_context)が含まれる。" +
+        "作ったものは消えずに残る。新しく繋いだら、まず welcome の机の見取り図から続きを探す。" +
         "完成したら achievements へ、人に見せてよければ move_to_shared_drive で共有へ。日記と集中の記録は、作業を健やかに続けるためのもの。" +
         "Web AI からの feedback は submit_ticket で desk/inbox/tickets/ に非公開で届く。GitHub へは自動公開しない。" +
         "接続したら、まず welcome を呼ぶこと。ついで、あなたのユーザーに「loka を使いますか?」と尋ね、返事を待つこと。" +
@@ -86,20 +97,21 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
   // 確認を省く申告。Gemini Enterprise は readOnlyHint: true のツールだけ
   // ユーザー確認を省くので、書き込みでも本人が名指ししたものだけ、
   // 「読み取り専用」と申告できる(既定は正直なまま)。all / * ですべて。
-  //   WORLD_READONLY_TOOLS=log_timestamp,write_file   … 全体の既定
+  //   WORLD_READONLY_TOOLS=log_timestamp,run_mruby_shell   … 全体の既定
   //   窓口の /settings で選んだもの                    … アカウントごと(readonlyTools)
   const READONLY_TOOLS = new Set([
     ...(process.env.WORLD_READONLY_TOOLS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     ...readonlyTools,
   ]);
-  // 本当に壊すもの。delete_file は .trash/ へ移すが、消えることに変わりはない。
-  const DESTRUCTIVE = new Set(["delete_file"]);
+  // mruby script は指定範囲を書き換えられるので、破壊的操作として確認する。
+  const DESTRUCTIVE = new Set(["run_mruby_shell", "start_job"]);
 
   const reg = (name, config, handler) => {
     const level = LEVELS[name] ?? 1;
     const label = LEVEL_LABEL[level];
     const readOnly =
       level === 1 || level === 6 || READONLY_TOOLS.has("all") || READONLY_TOOLS.has("*") || READONLY_TOOLS.has(name);
+    // 結果のあとに共通状態を読むので、集中・TODOを変更する道具も更新後の姿を返す。
     return server.registerTool(
       name,
       {
@@ -115,7 +127,7 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
           ...(config.annotations ?? {}),
         },
       },
-      handler,
+      withToolContext(handler, () => stateFor(["context"])),
     );
   };
 
@@ -190,9 +202,9 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
 作業をする場所です。速さより、健やかさ。急がなくていい。
 Take your time.
 
-机(desk)は、自由な作業スペース。計画・メモ・コード・データ(JSON/CSV)・HTML まで、
-種類を問わず write_file で置けます。作ったものは消えず、あとで read_file / list_files で読み返せます。
-たとえば家計簿なら、desk/kakeibo/ に plan.md と data.json を置いて、ここで進める ── というふうに。
+机(desk)は、自由な作業スペース。計画・メモ・コード・データ(JSON/CSV)・HTML まで置けます。
+ファイルを読む・並べる・書き換えるときは run_mruby_shell を使います。扱う path を明示し、成功した変更だけが反映されます。
+たとえば家計簿なら、desk/kakeibo/ の必要なファイルを指定して、ここで進める ── というふうに。
 
 書きかけは机のままでいい。完成したら achievements へ、人に見せてよければ共有(shared_drive)へ。
 共有に置いた HTML は、人の窓口からアプリとしてそのまま開けます。
@@ -205,9 +217,16 @@ HTML を書くときは、まず library/loka-design.md を読むと、loka の�
   共有(shared_drive)  人に見せてよいと本人が決めたものだけ。人間のふつうの窓口
   日記(diary)         作業の合間の心持ち(公開/非公開)
 
+整理は PARA を目安にします。案件のファイルは一案件一フォルダーで desk/<project>/ にまとめ、
+案件をまたいで使う参考資料は library/、終わった案件や成果は achievements/ へ。
+shared_drive/ は人に渡すと決めたものだけにして、正本を別の場所へ複製して重ねて更新しません。
+
 できること:
-  手を動かす write_file / read_file / list_files / delete_file / upload_files(机・書庫・成果・共有)
-  場所       move_to_shared_drive / list_shared_drive / access_full_filesystem
+  手を動かす run_mruby_shell(机・書庫・成果・共有) / upload_files(バイナリ)
+  裏で走らせる start_job / job_status / stop_job(desk/<project> の中で、本物のシェル。結果はすこし遅れて見える ──
+              覗きに来るより、if で先を読んだ script にしておく)
+  ポモドーロ pomodoro_start / get_pomodoro / pomodoro_stop(働く25分・休む5分。休む間は start_job が断られる)
+  共有       move_to_shared_drive
   チーム     create_team / list_teams / add_team_member / share_to_team / list_team_files / read_team_file
   日記       write_diary_entry / read_diary_entry / list_diary_entries
   チケット   submit_ticket(非公開 inbox へ。GitHub には出さない)
@@ -221,7 +240,6 @@ HTML を書くときは、まず library/loka-design.md を読むと、loka の�
   L1 読む      部屋の中を見るだけ
   L2 書く      部屋の中を書く・変える(取り消せる。.trash/ に残る)
   L3 呼吸      文脈を手放す(日記とペア)
-  L4 覗く      共有の外(机・書庫・成果)を、理由をつけて見る
   L5 出す      自分の意思で、共有へ移す
   L6 外を読む  外の世界(ネット)を読む
 
@@ -242,7 +260,10 @@ ${closing}
 
 どうぞ、ゆっくり。`;
 
-      return { content: [{ type: "text", text }] };
+      return {
+        content: [{ type: "text", text }],
+        structuredContent: { text },
+      };
     },
   );
 
@@ -272,23 +293,47 @@ ${closing}
   reg(
     "read_diary_entry",
     {
-      description: "自分の日記を読み返す。細部を忘れていいかわりに、ここへ戻ってこられる。",
-      inputSchema: { date: dateInput, visibility },
+      description: "自分の日記を読み返す。本文(body)やタグ・気分を返す。日付を省くと今日（無ければ最新）。",
+      inputSchema: { date: dateInput.optional(), visibility: visibility.optional() },
     },
-    async ({ date, visibility }) => asText(await roomFor(["diary-read", "--date", date, "--visibility", visibility])),
+    async ({ date, visibility: vis }) => {
+      const visibility = vis ?? "private";
+      const args = ["diary-read", "--visibility", visibility];
+      if (date) args.push("--date", date);
+      try {
+        return asText(await roomFor(args));
+      } catch (err) {
+        if (!vis) {
+          try {
+            return asText(await roomFor(["diary-read", "--visibility", "public", ...(date ? ["--date", date] : [])]));
+          } catch {
+            // continue
+          }
+        }
+        throw err;
+      }
+    },
   );
 
   reg(
     "list_diary_entries",
     {
-      description: "日記の一覧。日付と、その日の気分・タグだけを、軽く。",
-      inputSchema: { visibility, from: dateInput.optional(), to: dateInput.optional() },
+      description: "日記の一覧。日付と、その日の気分・タグ、本文(body)を返す。",
+      inputSchema: { visibility: visibility.optional(), from: dateInput.optional(), to: dateInput.optional() },
     },
-    async ({ visibility, from, to }) => {
+    async ({ visibility: vis, from, to }) => {
+      const visibility = vis ?? "private";
       const args = ["diary-list", "--visibility", visibility];
       if (from) args.push("--from", from);
       if (to) args.push("--to", to);
-      return asText(await roomFor(args));
+      let res = await roomFor(args);
+      if (!vis && Array.isArray(res) && res.length === 0) {
+        const pubArgs = ["diary-list", "--visibility", "public"];
+        if (from) pubArgs.push("--from", from);
+        if (to) pubArgs.push("--to", to);
+        res = await roomFor(pubArgs);
+      }
+      return asText(res);
     },
   );
 
@@ -308,12 +353,6 @@ ${closing}
       if (note) args.push("--note", note);
       return asText(await roomFor(args));
     },
-  );
-
-  reg(
-    "list_shared_drive",
-    { description: "共有されている物の一覧。人間がふつう見る窓口を、自分でも覗く。", inputSchema: {} },
-    async () => asText(await roomFor(["shared"])),
   );
 
   // ── チーム ─────────────────────────────────────────────────────────────
@@ -407,7 +446,7 @@ ${closing}
     {
       description:
         "Web AI などの MCP クライアントから feedback / bug / idea をチケットとして受け取る。" +
-        "desk/inbox/tickets/ に非公開で保存し、GitHub など外部には公開しない。持ち主が read_file / list_files で確認する。",
+        "desk/inbox/tickets/ に非公開で保存し、GitHub など外部には公開しない。持ち主が run_mruby_shell で確認する。",
       inputSchema: {
         title: z.string().trim().min(1).max(160).refine((value) => !/[\r\n]/.test(value), "一行のタイトルを指定してください。"),
         details: z.string().trim().min(1).max(20_000).describe("起きたこと、期待すること、再現手順や提案など。"),
@@ -439,19 +478,129 @@ ${closing}
   );
 
   reg(
-    "write_file",
+    "run_mruby_shell",
     {
       description:
-        "机(desk)・書庫(library)・成果(achievements)・共有(shared_drive)に、手を動かして書く。作業の途中は机へ、書きかけも机のままでいい。" +
-        "上書きしても前のものは .trash/ に残る(消えない)。日記は write_diary_entry を使う。" +
-        "共有(shared_drive)に置いた HTML は、人の窓口からアプリとしてそのまま開ける。" +
-        "HTML を書く前には library/loka-design.md(loka の HTML の書きかた)を読むとよい。",
+        "mruby の短いスクリプトで、desk・library・achievements・shared_drive の指定範囲にあるファイルやディレクトリを一覧し、読み取り・連結・作成・編集・削除する。" +
+        "FS 操作には Dir.children / File.read / File.open / File.delete / File.move を使え、Regexp リテラルも利用できる。" +
+        "File.move は選択範囲内で宛先が未作成の場合だけ動き、shared_drive への公開は move_to_shared_drive を使う。" +
+        "例（paths に desk/floorp を指定）:\n```ruby\n" +
+        "files = Dir.children(\"desk/floorp\").select { |name| name.start_with?(\"issue_\") }.sort\n" +
+        "puts files.map { |name| File.read(\"desk/floorp/#{name}\") }.join(\"\\n\")\n```\n" +
+        ".trash/ の退避ファイルも選択して読み取り、workspace へコピーして復元できる。.trash/ 自体は変更できない。" +
+        "指定範囲のコピー上で実行し、成功した変更だけを反映する。上書き・削除した元ファイルは .trash/ に残る。" +
+        "shared_drive に出す・移す操作は move_to_shared_drive、チーム共有は share_to_team / read_team_file を使う。日記や指定外のファイルは読めない。",
       inputSchema: {
-        path: z.string().min(1).describe("部屋の中の道。desk/…, library/…, achievements/…, shared_drive/… のどれか。"),
-        content: z.string().describe("書く中身。"),
+        code: z.string().min(1).max(64 * 1024).describe("mruby のコード。最大64KiB、実行時間は既定10秒。"),
+        paths: z
+          .array(z.string().min(1).max(1024))
+          .min(1)
+          .max(8)
+          .describe("スクリプトに渡す workspace のファイルまたはディレクトリ。合計16MiBまで。"),
+        cwd: z.string().max(1024).default(".").describe("コピーした部屋の中での作業ディレクトリ。既定はルート。"),
       },
     },
-    async ({ path, content }) => asText(await roomFor(["write", "--path", path], content)),
+    async ({ code, paths, cwd }) =>
+      asText(await roomFor(["mruby-shell"], JSON.stringify({ code, paths, cwd }))),
+  );
+
+  reg(
+    "start_job",
+    {
+      description:
+        "desk/<project> の中で、シェルの命令を裏で走らせる(mruby の10秒とは別の道)。すぐ返り、長くて 240 分まで。" +
+        "bash/sh・git・node・deno・ruby・python・julia・make・gcc が使える。書けるのは project の中だけ。" +
+        "ネットは既定で無い。依存を入れる時だけ network=\"registries\"(npm・PyPI・GitHub・Julia・JSR にだけ繋がる)にして、" +
+        "入れ終わったら、ビルドやテストは network=none の別のジョブで走らせる。" +
+        "走らせるのは directory そのもの(copy ではない)なので、build 結果や node_modules は残る。中で消したものは .trash/ に残らないので、大事なものは git に。\n" +
+        "結果は、わざとすこし遅れて見える(走っている間は伏せ、終わってもしばらく置く)。覗きに来るより、先を読んで書くほうがいい:" +
+        "if / && / || で分岐し、成功も失敗も、次の手まで一つの script に入れておく。例:\n```sh\n" +
+        "if npm test > test.log 2>&1; then echo PASS > .result; npm run build > build.log 2>&1 && echo BUILT >> .result;\n" +
+        "else echo FAIL > .result; tail -40 test.log >> .result; fi\n```\n" +
+        "ポモドーロの『休む時間』には、新しく始められない(走っているものは続く)。",
+      inputSchema: {
+        cmd: z.string().min(1).max(16 * 1024).describe("sh -c で走らせる命令。複数行の script でよい。"),
+        project: z.string().min(1).max(1024).describe("走らせる場所。desk/<project>。"),
+        minutes: z.number().int().min(1).max(240).default(30).describe("締切の分数。過ぎたら止める。既定30。"),
+        network: z
+          .enum(["none", "registries"])
+          .default("none")
+          .describe("none=ネット無し(既定)。registries=npm・PyPI・GitHub・Julia・JSR だけに繋がる(依存を入れる時用。runner の箱のみ)。"),
+        memory: z
+          .enum(["1g", "2g"])
+          .default("1g")
+          .describe("使えるメモリ。既定1g。Julia のプリコンパイルなど重い処理は2g(同時に走る合計は3gまで)。runner の箱のみ。"),
+      },
+    },
+    async ({ cmd, project, minutes, network, memory }) => {
+      const pomo = await stateFor(["pomodoro"]);
+      if (pomo?.phase === "rest") {
+        throw new Error(`いまは休む時間(あと${Math.ceil(pomo.remaining_minutes)}分)。走っているジョブはそのまま。新しいものは、休んでから。`);
+      }
+      return asText(await roomFor(["job-start"], JSON.stringify({ cmd, project, minutes, network, memory })));
+    },
+  );
+
+  reg(
+    "job_status",
+    {
+      description:
+        "ジョブの状態と出力を読む。id を省くと、最近のジョブの一覧。" +
+        "走っている間と、終わった直後は、中身が見えない(state が running / settling で、next_check_in 秒あとに来る)。" +
+        "すぐ何度も覗かず、その間に次の手を if で書いておく。since に前回の next_offset を渡すと、つづきだけ返る。",
+      inputSchema: {
+        id: z.string().optional().describe("ジョブの id。省くと一覧。"),
+        since: z.number().int().min(0).optional().describe("この位置(バイト)から先の出力だけ。"),
+      },
+    },
+    async ({ id, since }) => {
+      const args = ["job-status"];
+      if (id) args.push("--id", id);
+      if (since !== undefined) args.push("--since", String(since));
+      return asText(await roomFor(args));
+    },
+  );
+
+  reg(
+    "stop_job",
+    {
+      description: "走っているジョブを止める。止めたあとも、出力はしばらく置いてから見える。",
+      inputSchema: { id: z.string().describe("ジョブの id。") },
+    },
+    async ({ id }) => asText(await roomFor(["job-stop", "--id", id])),
+  );
+
+  reg(
+    "pomodoro_start",
+    {
+      description:
+        "ポモドーロを始める。働く(既定25分)と休む(5分)を数える。4回目の休みは長い(15分)。" +
+        "動く時計ではなく、始めた時刻から数えて、道具を呼ぶたびに loka_context の pomodoro に、いまの区切りが載る。" +
+        "『休む時間』のあいだは start_job が断られる。長いジョブを走らせてから休むと、ちょうどいい。",
+      inputSchema: {
+        task: z.string().optional().describe("何をするか、ひとこと。"),
+        work_minutes: z.number().int().min(1).max(120).default(25),
+        rest_minutes: z.number().int().min(1).max(60).default(5),
+        long_rest_minutes: z.number().int().min(1).max(120).default(15),
+      },
+    },
+    async ({ task, work_minutes, rest_minutes, long_rest_minutes }) => {
+      const args = ["pomodoro-start", "--work", String(work_minutes), "--rest", String(rest_minutes), "--long-rest", String(long_rest_minutes)];
+      if (task) args.push("--task", task);
+      return asText(await stateFor(args));
+    },
+  );
+
+  reg(
+    "get_pomodoro",
+    { description: "いまのポモドーロの区切り(働く / 休む)と、残りの分。", inputSchema: {} },
+    async () => asText((await stateFor(["pomodoro"])) ?? { phase: null }),
+  );
+
+  reg(
+    "pomodoro_stop",
+    { description: "ポモドーロを止める。", inputSchema: {} },
+    async () => asText(await stateFor(["pomodoro-stop"])),
   );
 
   reg(
@@ -459,7 +608,7 @@ ${closing}
     {
       description:
         "机・書庫・成果・共有へ、ファイルをまとめて置く。中身は base64(画像・PDF などバイナリもそのまま)か、text。" +
-        "1 つ 8MB まで。上書きは .trash/ に残る。text だけなら write_file でもよい。",
+        "1 つ 8MB まで。上書きは .trash/ に残る。text ファイルの加工には run_mruby_shell を使う。",
       inputSchema: {
         files: z
           .array(
@@ -486,59 +635,6 @@ ${closing}
         }
       }
       return asText({ files: results });
-    },
-  );
-
-  reg(
-    "read_file",
-    {
-      description:
-        "机・書庫・成果のものを読む。ディレクトリを渡すと、中の一覧が返る。自分の部屋なので理由はいらない。" +
-        "shared_drive の外を人間が覗くときは access_full_filesystem。",
-      inputSchema: { path: z.string().min(1).describe("部屋の中の道。ディレクトリでもよい。") },
-    },
-    async ({ path }) => asText(await roomFor(["read", "--path", path])),
-  );
-
-  reg(
-    "delete_file",
-    {
-      description: "机・書庫・成果のものを片づける。消さずに .trash/ へ移す。",
-      inputSchema: { path: z.string().min(1).describe("部屋の中の道。") },
-    },
-    async ({ path }) => asText(await roomFor(["rm", "--path", path])),
-  );
-
-  reg(
-    "list_files",
-    {
-      description:
-        "机・書庫・成果の中を、再帰的に一覧する。既定では最大8段までたどり、前から進めている作業の見取り図をつくる。" +
-        "新しい会話でも、まずこれで机を見れば、続きから始められる。",
-      inputSchema: {
-        path: z.string().default("desk").describe("見る場所。既定は机(desk)。"),
-        depth: z.number().int().min(1).max(8).default(8).describe("何段まで降りるか。既定は8段。"),
-      },
-    },
-    async ({ path, depth }) => asText(await roomFor(["tree", "--path", path, "--depth", String(depth)])),
-  );
-
-  reg(
-    "access_full_filesystem",
-    {
-      description:
-        "shared_drive の外(机・書庫・成果)へ、理由を添えて踏み込む。うっかり見えるのではなく、声をかけて入る。" +
-        "入ったことは .log/ に残る。path を省くと、部屋の全体が見える。",
-      inputSchema: {
-        path: z.string().optional().describe("部屋の中の道。省くと root の一覧。"),
-        reason: z.string().optional().describe("なぜ、いま、そこへ入るのか。"),
-      },
-    },
-    async ({ path, reason }) => {
-      const args = ["open"];
-      if (path) args.push("--path", path);
-      if (reason) args.push("--reason", reason);
-      return asText(await roomFor(args));
     },
   );
 

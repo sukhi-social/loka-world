@@ -1,0 +1,12 @@
+#!/bin/sh
+# ジョブの入口。ネットは無い。/run/proxy.sock があれば、127.0.0.1:3128 で受けて
+# そのソケット(許可リスト付きプロキシ)へ渡し、道具が使うプロキシの環境変数を立てる。
+set -u
+if [ -S /run/proxy.sock ]; then
+  socat TCP-LISTEN:3128,bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:/run/proxy.sock &
+  P=http://127.0.0.1:3128
+  export HTTP_PROXY=$P HTTPS_PROXY=$P http_proxy=$P https_proxy=$P ALL_PROXY=$P
+  export NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1
+  export GIT_TERMINAL_PROMPT=0
+fi
+exec /bin/sh -c "$1"

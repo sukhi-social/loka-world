@@ -23,6 +23,7 @@ rsync -az --delete \
 echo "→ 箱(hako)も送る"
 ssh "$BOX" "mkdir -p '$SRC/hako/lib'"
 rsync -az --delete "$HAKO/lib/" "$BOX:$SRC/hako/lib/"
+rsync -az "$HERE/hako/landlock-exec.c" "$BOX:$SRC/hako/landlock-exec.c"
 
 echo "→ 箱で焼く"
 ssh "$BOX" "cd '$SRC' && docker build -t 127.0.0.1:5000/world:v0 . && docker push 127.0.0.1:5000/world:v0"
