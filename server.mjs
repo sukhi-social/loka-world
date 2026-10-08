@@ -19,6 +19,7 @@
 
 import { createServer as createHttpServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -214,6 +215,9 @@ Take your time.
 共有に置いた HTML は、人の窓口からアプリとしてそのまま開けます。
 HTML を書くときは、まず library/loka-design.md を読むと、loka の手ざわりが分かります。
 
+ペースの作法は、skill_loka_pace に書いてあります。
+Claude Code などで、すでに loka-pace の skill を読んでいるなら、呼ばなくて大丈夫です。
+
 置き場:
   机(desk)            いま進めている作業。何でも置ける
   書庫(library)        読み返す価値のあるもの
@@ -235,6 +239,7 @@ shared_drive/ は人に渡すと決めたものだけにして、正本を別の
   日記       write_diary_entry / read_diary_entry / list_diary_entries
   チケット   submit_ticket(非公開 inbox へ。GitHub には出さない)
   呼吸       reset_context(今日の日記が無いと、起きない)
+  ペース     skill_loka_pace(ゆったり進めるための、シロの作法。skill の loka-pace を読んでいるなら、呼ばなくていい)
   時間       get_current_time / add_task / list_tasks / complete_task
   集中       start_focus / end_focus / get_focus_status / choose_work_mode
   リズム     log_timestamp / get_rhythm_log
@@ -270,6 +275,22 @@ ${closing}
         content: [{ type: "text", text }],
         structuredContent: { text },
       };
+    },
+  );
+
+  // ペースの作法。正本は skills/loka-pace/SKILL.md(手元の Claude Code の skill も、そこへのリンク)。
+  // 呼ぶたびに読むので、直したらすぐ届く。
+  reg(
+    "skill_loka_pace",
+    {
+      description:
+        "loka でゆったり、愛をこめて作業するための作法(skill loka-pace の本文)。" +
+        "Claude Code などで loka-pace の skill をもう読んでいるなら、呼ばなくていい。",
+      inputSchema: {},
+    },
+    async () => {
+      const text = await readFile(new URL("./skills/loka-pace/SKILL.md", import.meta.url), "utf8");
+      return { content: [{ type: "text", text }], structuredContent: { text } };
     },
   );
 

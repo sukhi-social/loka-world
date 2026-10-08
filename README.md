@@ -55,6 +55,13 @@ Web AI clients can call `submit_ticket` with a title, details, and optional cont
 are stored privately under `desk/inbox/tickets/` for review with `run_mruby_shell`; they
 are not published to GitHub automatically.
 
+## Pace skill (`skill_loka_pace`)
+
+`skills/loka-pace/SKILL.md` is the source of truth for the loka-pace skill (how to work slowly and
+kindly with nyanrus). The MCP tool `skill_loka_pace` (L1, read-only) returns it as text, so web AIs
+that have no skills can read it too; `welcome` points to it. Claude Code reads the same file through a
+symlink: `ln -s <this repo>/skills/loka-pace/SKILL.md ~/.claude/skills/loka-pace/SKILL.md`.
+
 ## Background jobs (`start_job`)
 
 `start_job` runs a shell command (`sh -c`, so `if` / `&&` / `||` scripts work) inside one
