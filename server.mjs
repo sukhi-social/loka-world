@@ -28,6 +28,7 @@ import { z } from "zod";
 import "./paths.mjs"; // ROOM_ROOT / STATE_DIR を先に決める
 import { accessKey, bearerOk, oauthClient, ownerAccount, tokenAccount } from "./auth.mjs";
 import { fetchExternal, githubDiscussions, githubIssues } from "./external.mjs";
+import { handleMac, macExec, macStatus } from "./mac.mjs";
 import { handleOAuth } from "./oauth.mjs";
 import { handlePortal } from "./portal.mjs";
 import { room } from "./room.mjs";
@@ -104,13 +105,16 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
     ...readonlyTools,
   ]);
   // mruby script は指定範囲を書き換えられるので、破壊的操作として確認する。
-  const DESTRUCTIVE = new Set(["run_mruby_shell", "start_job"]);
+  const DESTRUCTIVE = new Set(["run_mruby_shell", "start_job", "mac_exec"]);
 
   const reg = (name, config, handler) => {
     const level = LEVELS[name] ?? 1;
     const label = LEVEL_LABEL[level];
+    // L7(Mac のシェル)は、申告で確認を省けない。
     const readOnly =
-      level === 1 || level === 6 || READONLY_TOOLS.has("all") || READONLY_TOOLS.has("*") || READONLY_TOOLS.has(name);
+      level === 1 ||
+      level === 6 ||
+      (level < 7 && (READONLY_TOOLS.has("all") || READONLY_TOOLS.has("*") || READONLY_TOOLS.has(name)));
     // 結果のあとに共通状態を読むので、集中・TODOを変更する道具も更新後の姿を返す。
     return server.registerTool(
       name,
@@ -123,7 +127,7 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
           readOnlyHint: readOnly,
           destructiveHint: !readOnly && DESTRUCTIVE.has(name),
           idempotentHint: readOnly,
-          openWorldHint: OPEN_WORLD.has(name),
+          openWorldHint: OPEN_WORLD.has(name) || level === 7,
           ...(config.annotations ?? {}),
         },
       },
@@ -235,6 +239,7 @@ shared_drive/ は人に渡すと決めたものだけにして、正本を別の
   集中       start_focus / end_focus / get_focus_status / choose_work_mode
   リズム     log_timestamp / get_rhythm_log
   外を読む   fetch_url / github_issues / github_discussions
+  Mac        mac_status / mac_exec(持ち主が agent を起動した間だけ。最大12時間。休む間は断られる)
 
 段(どこまで届くか):
   L1 読む      部屋の中を見るだけ
@@ -242,6 +247,7 @@ shared_drive/ は人に渡すと決めたものだけにして、正本を別の
   L3 呼吸      文脈を手放す(日記とペア)
   L5 出す      自分の意思で、共有へ移す
   L6 外を読む  外の世界(ネット)を読む
+  L7 Mac を触る 持ち主の Mac のシェル(持ち主が開けた時間だけ。確認を省けない)
 
 作法:
   - private の日記は、持ち主のもの。人に見せるものではない。
@@ -812,6 +818,44 @@ ${closing}
     async ({ repo, limit, category }) => asText(await githubDiscussions({ repo, limit, category })),
   );
 
+  // ── Mac を触る ─────────────────────────────────────────────────────────
+  //
+  // 開けるのは Mac の持ち主だけ(Mac で agent を --hours つきで起動する。上限12時間)。
+  // AI が自分で開けることはできない。命令はすべて持ち主の端末に映り、state/mac_exec.log に残る。
+
+  reg(
+    "mac_status",
+    {
+      description: "持ち主の Mac のシェルへの道が、いま開いているか。開いていれば、あと何分か。",
+      inputSchema: {},
+    },
+    async () => asText(macStatus()),
+  );
+
+  reg(
+    "mac_exec",
+    {
+      description:
+        "持ち主の Mac のシェル(zsh -c)で、命令をひとつ走らせる。持ち主が agent を起動している間(最大12時間)だけ使える。" +
+        "閉じていたら断られる ── その時は無理に回り道せず、持ち主に開けてもらう。" +
+        "本物の Mac なので、消す・上書き・外へ送る命令は、走らせる前に持ち主へ伝えて確かめる。" +
+        "出力は各 64KiB まで。対話は無い(stdin なし)。",
+      inputSchema: {
+        cmd: z.string().min(1).max(16 * 1024).describe("zsh -c で走らせる命令。"),
+        cwd: z.string().max(1024).optional().describe("作業ディレクトリ(絶対パス)。省くと Mac のホーム。"),
+        timeout_seconds: z.number().int().min(1).max(600).default(60).describe("締切の秒数。既定60、最大600。"),
+      },
+    },
+    async ({ cmd, cwd, timeout_seconds }) => {
+      if (account !== ownerAccount()) throw new Error("Mac の道は、持ち主のアカウントだけ。");
+      const pomo = await stateFor(["pomodoro"]);
+      if (pomo?.phase === "rest") {
+        throw new Error(`いまは休む時間(あと${Math.ceil(pomo.remaining_minutes)}分)。休んでから。`);
+      }
+      return asText(await macExec({ cmd, cwd, timeoutSeconds: timeout_seconds }));
+    },
+  );
+
   return server;
 }
 
@@ -907,6 +951,8 @@ async function runHttp() {
       }
 
       if (path === "/mcp") return handleMcp(req, res, hosts);
+
+      if (await handleMac(req, res, url)) return;
 
       if (await handlePortal(req, res, url)) return;
 

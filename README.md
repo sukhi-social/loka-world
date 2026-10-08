@@ -93,6 +93,28 @@ Install on the host with `WORLD_BOX=rocky@HOST runner/install.sh`.
 no timer process: the phase is computed from the start time and attached to every tool reply as
 `loka_context.pomodoro`. `start_job` is refused during a rest phase; running jobs continue.
 
+## Mac shell (`mac_exec`)
+
+Lets an AI run commands in the owner's real Mac shell, only while the owner has opened the door.
+The Mac runs a small agent that connects *out* to loka (long-poll over HTTPS; no port is opened):
+
+```sh
+node mac/loka-mac-agent.mjs --hours 2 [--server https://loka.f3liz.casa]
+```
+
+The agent opens the browser at `/oauth/sukhi/mac`, you sign in with sukhi, and only the owner account
+is let through. The result returns to a one-off port on the Mac's `127.0.0.1` (PKCE, single-use code)
+and is exchanged for a token that lives `--hours` long. The passphrase is not used on this path. Tokens
+are kept in memory only, so a server restart closes the door.
+
+`--hours` is required and must be in (0, 12]. The deadline belongs to the token and the server counts
+it; the agent also exits when the time is up (Ctrl-C closes it at any point).
+Nothing in MCP can open the door. `mac_status` shows whether it is open and the minutes left;
+`mac_exec(cmd, cwd?, timeout_seconds?)` runs one `zsh -c` command (no stdin, output capped at 64 KiB
+each, up to 600 s and never past the deadline). It is owner-account only, refused during a pomodoro
+rest, and it is L7: it cannot be marked read-only (not even by `all`). Every command is printed in the
+agent's terminal and appended to `state/mac_exec.log`.
+
 ## mruby workspace scripts
 
 `run_mruby_shell` runs a short mruby program to read, list, create, edit, or delete files in explicitly

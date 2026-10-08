@@ -22,11 +22,13 @@ import {
   takeCode,
   takeRefresh,
   issueTokens,
+  ownerAccount,
   passphraseOk,
   verifyState,
   visitCookieHeader,
   accountCookieHeader,
 } from "./auth.mjs";
+import { MAX_HOURS, mintMacCode } from "./mac.mjs";
 import { accountAllowed, sukhiAuthorizeUrl, sukhiExchange, sukhiVerify } from "./sukhi_login.mjs";
 import { escapeHtml, originOf, page, parseCookies, readBody, sendHtml, sendJson } from "./web.mjs";
 
@@ -151,6 +153,25 @@ export async function handleOAuth(req, res, url) {
     return true;
   }
 
+  // Mac の agent の入口。agent が自分の loopback と PKCE の challenge を添えて開く。
+  //   /oauth/sukhi/mac?port=&challenge=&hours=   → sukhi → callback → http://127.0.0.1:port/callback?code=
+  if (path === "/oauth/sukhi/mac" && req.method === "GET") {
+    const p = url.searchParams;
+    const port = Number(p.get("port"));
+    const hours = Number(p.get("hours"));
+    const challenge = p.get("challenge") ?? "";
+    if (!(Number.isInteger(port) && port >= 1024 && port <= 65535) || !/^[A-Za-z0-9_-]{43}$/.test(challenge) || !(hours > 0 && hours <= MAX_HOURS))
+      return sendHtml(res, page(400, "Mac の道", "<p>port・challenge・hours(12 以下)が読めません。agent から開いてください。</p>")), true;
+    try {
+      const state = signState({ purpose: "mac", port, challenge, hours });
+      res.writeHead(302, { location: await sukhiAuthorizeUrl({ origin: originOf(req), state }) });
+      res.end();
+    } catch (e) {
+      return sendHtml(res, page(502, "sukhi と話せません", `<p>${escapeHtml(e.message)}</p>`)), true;
+    }
+    return true;
+  }
+
   if (path === "/oauth/sukhi/callback" && req.method === "GET") {
     const p = url.searchParams;
     const st = verifyState(p.get("state"));
@@ -162,6 +183,15 @@ export async function handleOAuth(req, res, url) {
       const acct = String(me.acct ?? "").replace(/^@/, "");
       if (!accountAllowed(acct))
         return sendHtml(res, page(403, "通せません", `<p>@${escapeHtml(acct)} は、この部屋の許容に居ません。</p>`)), true;
+
+      if (st.purpose === "mac") {
+        if (acct.toLowerCase() !== ownerAccount().toLowerCase())
+          return sendHtml(res, page(403, "通せません", "<p>Mac の道は、持ち主のアカウントだけです。</p>")), true;
+        const code = mintMacCode({ challenge: st.challenge, hours: st.hours, account: ownerAccount() });
+        res.writeHead(302, { location: `http://127.0.0.1:${st.port}/callback?code=${encodeURIComponent(code)}` });
+        res.end();
+        return true;
+      }
 
       if (st.purpose === "key") {
         const t = issueTokens({ clientId: "sukhi-login", scope: "world", account: acct });

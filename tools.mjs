@@ -6,6 +6,7 @@
 //   L3 呼吸     ── 文脈を手放す(日記とペア)
 //   L5 出す     ── 自分の意思で、共有へ移す
 //   L6 外を読む ── 外の世界(ネット)を読む
+//   L7 Mac を触る ── 持ち主の Mac のシェル(持ち主が agent を起動した時間だけ。申告で確認を省けない)
 //
 // server(注釈を付ける)と portal(設定ページに並べる)の、両方がここを見る。
 
@@ -22,9 +23,10 @@ export const LEVELS = {
   start_job: 4, stop_job: 4,
   move_to_shared_drive: 5, share_to_team: 5,
   fetch_url: 6, github_issues: 6, github_discussions: 6,
+  mac_status: 1, mac_exec: 7,
 };
 
-export const LEVEL_LABEL = { 1: "L1 読む", 2: "L2 書く", 3: "L3 呼吸", 4: "L4 走らせる", 5: "L5 出す", 6: "L6 外を読む" };
+export const LEVEL_LABEL = { 1: "L1 読む", 2: "L2 書く", 3: "L3 呼吸", 4: "L4 走らせる", 5: "L5 出す", 6: "L6 外を読む", 7: "L7 Mac を触る" };
 
 export const OPEN_WORLD = new Set(["fetch_url", "github_issues", "github_discussions"]);
 
