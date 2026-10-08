@@ -127,13 +127,15 @@ function ghError(r) {
   return { error: `GitHub が ${r.status}`, ...(hint ? { hint } : {}), detail: r.body.slice(0, 300) };
 }
 
-export async function githubIssues({ repo, state = "open", labels, limit = 20, includePrs = false, sort = "updated" }) {
+export async function githubIssues({ repo, state = "open", labels, limit = 20, includePrs = false, sort = "updated", query, page = 1 }) {
   const [owner, name] = parseRepo(repo);
   const capped = Math.min(Math.max(limit, 1), 100);
 
   if (!includePrs) {
     // issues だけを確実に取るには Search API(REST /issues は PR が混じり、更新順だと 0 になりやすい)。
-    const q = [`repo:${owner}/${name}`, "type:issue"];
+    const q = [];
+    if (query && String(query).trim()) q.push(String(query).trim());
+    q.push(`repo:${owner}/${name}`, "type:issue");
     if (state !== "all") q.push(`state:${state}`);
     for (const l of String(labels ?? "").split(",").map((s) => s.trim()).filter(Boolean)) q.push(`label:"${l}"`);
     const u = new URL("https://api.github.com/search/issues");
@@ -141,6 +143,7 @@ export async function githubIssues({ repo, state = "open", labels, limit = 20, i
     u.searchParams.set("sort", { created: "created", comments: "comments" }[sort] ?? "updated");
     u.searchParams.set("order", "desc");
     u.searchParams.set("per_page", String(capped));
+    u.searchParams.set("page", String(page));
     const r = await fetchExternal(u.toString(), { headers: ghHeaders() });
     if (!r.ok) return ghError(r);
     const data = JSON.parse(r.body);
@@ -152,7 +155,10 @@ export async function githubIssues({ repo, state = "open", labels, limit = 20, i
       via: "search",
       authenticated: Boolean(ghToken()),
       total: data.total_count,
+      page,
       count: items.length,
+      // Search API は先頭 1000 件までしか返さない。それより先は query / labels で絞る。
+      has_more: page * capped < Math.min(data.total_count ?? 0, 1000),
       ...(items.length === 0
         ? { note: "この条件では 0 件。state や labels を外して試せる(この repo には無いかもしれない)。" }
         : {}),
@@ -163,6 +169,7 @@ export async function githubIssues({ repo, state = "open", labels, limit = 20, i
   const u = new URL(`https://api.github.com/repos/${owner}/${name}/issues`);
   u.searchParams.set("state", state);
   u.searchParams.set("per_page", String(capped));
+  u.searchParams.set("page", String(page));
   u.searchParams.set("sort", sort);
   u.searchParams.set("direction", "desc");
   if (labels) u.searchParams.set("labels", labels);
@@ -175,7 +182,9 @@ export async function githubIssues({ repo, state = "open", labels, limit = 20, i
     state,
     via: "issues",
     authenticated: Boolean(ghToken()),
+    page,
     count: Math.min(list.length, capped),
+    has_more: list.length >= capped,
     ...(list.length === 0 ? { note: "この条件では 0 件。state や labels を外して試せる。" } : {}),
     issues: list.slice(0, capped).map(shapeIssue),
   };

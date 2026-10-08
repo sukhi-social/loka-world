@@ -784,17 +784,19 @@ ${closing}
   reg(
     "github_issues",
     {
-      description: "GitHub の Issues を読む(PR は既定で外す)。repo は owner/name。",
+      description: "GitHub の Issues を読む・検索する(PR は既定で外す)。repo は owner/name。query で絞り、page で全件をめくれる。",
       inputSchema: {
         repo: z.string().min(3).describe("owner/name(または URL)。"),
         state: z.enum(["open", "closed", "all"]).default("open"),
+        query: z.string().optional().describe("検索語(タイトル・本文。例: \"is:open label:bug 認証\")。include_prs では使えない。"),
         labels: z.string().optional().describe("カンマ区切りのラベル。"),
         limit: z.number().int().min(1).max(100).default(20),
+        page: z.number().int().min(1).default(1).describe("ページ番号。has_more が true のあいだ、次へめくれる。"),
         include_prs: z.boolean().default(false).describe("Pull Request も混ぜるか。"),
       },
     },
-    async ({ repo, state, labels, limit, include_prs }) =>
-      asText(await githubIssues({ repo, state, labels, limit, includePrs: include_prs })),
+    async ({ repo, state, query, labels, limit, page, include_prs }) =>
+      asText(await githubIssues({ repo, state, query, labels, limit, page, includePrs: include_prs })),
   );
 
   reg(
