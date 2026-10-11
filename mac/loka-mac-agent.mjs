@@ -32,7 +32,7 @@ if (!(hours > 0 && hours <= MAX_HOURS)) {
 const server = values.server.replace(/\/$/, "");
 let key = null;
 let until = 0;
-let current = null; // 走っている子
+const running = new Set(); // 走っている子(命令は裏で並べて走らせ、poll は止めない)
 let closing = false;
 
 const stamp = () => new Date().toLocaleTimeString("ja-JP", { hour12: false });
@@ -90,7 +90,7 @@ function run(job) {
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    current = child;
+    running.add(child);
     let stdout = "";
     let stderr = "";
     let truncated = false;
@@ -114,7 +114,7 @@ function run(job) {
     const timer = setTimeout(() => ((timedOut = true), killGroup()), job.timeout_seconds * 1000);
     const done = (extra) => {
       clearTimeout(timer);
-      current = null;
+      running.delete(child);
       resolve({
         id: job.id,
         stdout,
@@ -133,13 +133,24 @@ function run(job) {
   });
 }
 
+async function runAndReport(job) {
+  say(`$ ${job.cmd}  (cwd: ${job.cwd || "~"}, 最大 ${job.timeout_seconds}s)`);
+  try {
+    const result = await run(job);
+    say(`→ exit ${result.exit_code ?? result.signal}${result.timed_out ? " (時間切れ)" : ""}`);
+    await post("/mac/result", result);
+  } catch (e) {
+    if (!closing) say(`結果を送れませんでした: ${e.message}`);
+  }
+}
+
 function shutdown(why) {
   if (closing) return;
   closing = true;
   say(`閉じます(${why})。`);
-  if (current) {
+  for (const child of running) {
     try {
-      process.kill(-current.pid, "SIGKILL");
+      process.kill(-child.pid, "SIGKILL");
     } catch {
       // もう居ない
     }
@@ -165,12 +176,8 @@ while (!closing) {
     const t = setTimeout(() => ctl.abort(), 40_000);
     const reply = await post("/mac/poll", { host: hostname() }, ctl.signal).finally(() => clearTimeout(t));
     if (reply.expired) shutdown("サーバー側でも期限切れ");
-    if (reply.job) {
-      say(`$ ${reply.job.cmd}  (cwd: ${reply.job.cwd || "~"}, 最大 ${reply.job.timeout_seconds}s)`);
-      const result = await run(reply.job);
-      say(`→ exit ${result.exit_code ?? result.signal}${result.timed_out ? " (時間切れ)" : ""}`);
-      await post("/mac/result", result);
-    }
+    // 命令は裏で走らせる。待つと、その間 poll が止まり、サーバーから「繋がっていない」と見えてしまう。
+    if (reply.job) runAndReport(reply.job);
   } catch (e) {
     if (closing) break;
     say(`繋ぎなおします: ${e.message}`);
