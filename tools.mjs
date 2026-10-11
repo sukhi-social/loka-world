@@ -23,6 +23,8 @@ export const LEVELS = {
   start_job: 4, stop_job: 4,
   move_to_shared_drive: 5, share_to_team: 5,
   fetch_url: 6, github_issues: 6, github_discussions: 6,
+  sukhi_read_home: 6, sukhi_read_mentions: 6, sukhi_read_notifications: 6, sukhi_unread_count: 6,
+  sukhi_post: 5, sukhi_reply: 5, sukhi_say: 5, sukhi_ack: 5,
   mac_status: 1, mac_exec: 7,
 };
 
@@ -44,7 +46,11 @@ export const flowRefusal = (name) => {
 
 export const LEVEL_LABEL = { 1: "L1 読む", 2: "L2 書く", 3: "L3 呼吸", 4: "L4 走らせる", 5: "L5 出す", 6: "L6 外を読む", 7: "L7 Mac を触る" };
 
-export const OPEN_WORLD = new Set(["fetch_url", "github_issues", "github_discussions"]);
+export const OPEN_WORLD = new Set([
+  "fetch_url", "github_issues", "github_discussions",
+  "sukhi_read_home", "sukhi_read_mentions", "sukhi_read_notifications", "sukhi_unread_count",
+  "sukhi_post", "sukhi_reply", "sukhi_say", "sukhi_ack",
+]);
 
 // はじめから読み取り(L1/L6)のものは、切り替えの必要がない。
 export const isReadOnlyByDesign = (name) => (LEVELS[name] ?? 1) === 1 || LEVELS[name] === 6;

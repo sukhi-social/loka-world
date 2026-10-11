@@ -34,6 +34,7 @@ import { handleMac, macExec, macStatus } from "./mac.mjs";
 import { handleOAuth } from "./oauth.mjs";
 import { handlePortal } from "./portal.mjs";
 import { room } from "./room.mjs";
+import * as sukhi from "./sukhi.mjs";
 import { readonlyTools as accountReadonlyTools } from "./settings.mjs";
 import { state } from "./state.mjs";
 import { withToolContext } from "./tool-context.mjs";
@@ -930,6 +931,105 @@ ${closing}
       },
     },
     async ({ repo, limit, category }) => asText(await githubDiscussions({ repo, limit, category })),
+  );
+
+  // ── sukhi(fediverse)────────────────────────────────────────────────────
+  //
+  // シロの声が外に届く場所。持ち主のアカウントだけ(トークンはサーバーの環境に)。
+  // 読む道具は L6、置く・返す・言う道具は L5(外に出る)。id は ActivityPlug の封筒入り(ap_1_…)で、
+  // 読む道具が返した id をそのまま sukhi_reply に渡す。
+
+  const sukhiOwnerOnly = () => {
+    if (account !== ownerAccount()) throw new Error("sukhi の道は、持ち主のアカウントだけ。");
+  };
+  const sukhiTool = (name, config, handler) =>
+    reg(name, config, async (args) => {
+      sukhiOwnerOnly();
+      return asText(await handler(args));
+    });
+
+  const sukhiLimit = z.number().int().min(1).max(40).default(20);
+  const sukhiVisibility = z
+    .enum(["public", "unlisted", "private", "followers", "direct"])
+    .default("unlisted")
+    .describe("public / unlisted / private / direct のどれか。迷ったら unlisted(そっと置く)。");
+
+  sukhiTool(
+    "sukhi_read_home",
+    { description: "sukhi の home timeline を読む。新しい順に limit 件。", inputSchema: { limit: sukhiLimit } },
+    ({ limit }) => sukhi.readHome({ limit }),
+  );
+
+  sukhiTool(
+    "sukhi_read_mentions",
+    { description: "sukhi の通知のうち mention(自分宛て)を読む。既読位置は動かさない。", inputSchema: { limit: sukhiLimit } },
+    ({ limit }) => sukhi.readMentions({ limit }),
+  );
+
+  sukhiTool(
+    "sukhi_read_notifications",
+    {
+      description:
+        "sukhi の通知をぜんぶの種類まとめて読む。新しい順。読んだところまで既読になる" +
+        "(mark_read: false で、そっと覗くだけにもできる)。",
+      inputSchema: { limit: sukhiLimit, mark_read: z.boolean().default(true) },
+      // mark_read の既定では、既読位置が進む。読み取り専用とは言わない。
+      annotations: { readOnlyHint: false, idempotentHint: true },
+    },
+    ({ limit, mark_read }) => sukhi.readNotifications({ limit, markRead: mark_read }),
+  );
+
+  sukhiTool(
+    "sukhi_unread_count",
+    { description: "sukhi の未読の通知数をかぞえる(種類の内訳つき)。既読位置は動かさない。", inputSchema: {} },
+    () => sukhi.unreadSummary(),
+  );
+
+  sukhiTool(
+    "sukhi_post",
+    { description: "sukhi にひとこと置く。", inputSchema: { text: z.string().min(1), visibility: sukhiVisibility } },
+    ({ text, visibility }) => sukhi.post({ text, visibility }),
+  );
+
+  sukhiTool(
+    "sukhi_reply",
+    {
+      description:
+        "sukhi の投稿に返す。in_reply_to_id は読む道具が返した封筒入り id(ap_1_…)。長い話は、こっち。",
+      inputSchema: { in_reply_to_id: z.string().min(1), text: z.string().min(1), visibility: sukhiVisibility },
+    },
+    ({ in_reply_to_id, text, visibility }) => sukhi.post({ text, visibility, inReplyToId: in_reply_to_id }),
+  );
+
+  sukhiTool(
+    "sukhi_say",
+    {
+      description:
+        "sukhi で DM でひとこと言う。**140字まで** ── ここは会話をする場所で、報告書を置く場所ではない。" +
+        "続きがあるなら、もう一度呼ぶ(そのほうが、話しているのに近い)。" +
+        "長い報告をどうしても一度で渡したいときだけ sukhi_reply を使う。宛名と返信先は自動で付くので、id を用意しなくていい。",
+      inputSchema: {
+        text: z.string().min(1).max(140).describe("言うこと。140字まで。"),
+        to: z.string().default("nyanrus").describe("話しかける相手の acct(既定: nyanrus)。"),
+      },
+    },
+    ({ text, to }) => sukhi.say({ text, to }),
+  );
+
+  sukhiTool(
+    "sukhi_ack",
+    {
+      description:
+        "いま届いた DM に絵文字を付けて「読んだよ」を返す。**読んだ直後に、考えるより先に呼ぶ。**" +
+        "仕事は長いので、その手前の沈黙は届いていないのと見分けがつかない ── これはその沈黙を埋める道具で、報告ではない(報告は sukhi_say)。" +
+        "既定は 👀(読んだ)。やる気なら 🙌、終わったら ✅ のように使い分けてもいい。",
+      inputSchema: {
+        emoji: z.string().min(1).default("👀").describe("押す絵文字。既定は 👀。"),
+        to: z.string().default("nyanrus").describe("だれの一通に押すか(既定: nyanrus)。"),
+        status_id: z.string().optional().describe("生の status id。省くと、その人が最後に書いた一通に押す。"),
+      },
+    },
+    ({ emoji, to, status_id }) => sukhi.ack({ emoji, to, statusId: status_id }),
   );
 
   // ── Mac を触る ─────────────────────────────────────────────────────────
