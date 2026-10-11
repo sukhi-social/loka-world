@@ -33,9 +33,11 @@ import { MAX_STEPS, runFlow, validate } from "./flow.mjs";
 import { handleMac, macExec, macStatus } from "./mac.mjs";
 import { handleOAuth } from "./oauth.mjs";
 import { handlePortal } from "./portal.mjs";
+import { handleVoiceHttp } from "./voice_http.mjs";
 import { room } from "./room.mjs";
-import * as sukhi from "./sukhi.mjs";
-import { readInbox, startEar } from "./sukhi_ear.mjs";
+import { sukhiFor } from "./sukhi.mjs";
+import { readInbox } from "./sukhi_ear.mjs";
+import { startAllEars } from "./sukhi_ears.mjs";
 import { readonlyTools as accountReadonlyTools } from "./settings.mjs";
 import { state } from "./state.mjs";
 import * as zulip from "./zulip.mjs";
@@ -937,18 +939,20 @@ ${closing}
 
   // ── sukhi(fediverse)────────────────────────────────────────────────────
   //
-  // シロの声が外に届く場所。持ち主のアカウントだけ(トークンはサーバーの環境に)。
-  // 読む道具は L6、置く・返す・言う道具は L5(外に出る)。id は ActivityPlug の封筒入り(ap_1_…)で、
-  // 読む道具が返した id をそのまま sukhi_reply に渡す。
+  // シロの声が外に届く場所。声はアカウントごとに別(設定ページの「声を繋ぐ」で、ボットのアカウントを繋ぐ)。
+  // 持ち主だけ、サーバーの環境(MASTODON_*)が種になる。読む道具は L6、置く・返す・言う道具は L5(外に出る)。
+  // id は ActivityPlug の封筒入り(ap_1_…)で、読む道具が返した id をそのまま sukhi_reply に渡す。
 
-  const ownerOnly = () => {
-    if (account !== ownerAccount()) throw new Error("sukhi と Zulip の道は、持ち主のアカウントだけ。");
-  };
-  const ownerTool = (name, config, handler) =>
+  const NO_VOICE =
+    "この部屋の声は、まだ sukhi に繋がっていません。窓口の設定ページで「声を繋ぐ」から、ボットのアカウントで sukhi にログインしてください。";
+  const sukhiTool = (name, config, handler) =>
     reg(name, config, async (args) => {
-      ownerOnly();
-      return asText(await handler(args));
+      const s = sukhiFor(account);
+      if (!s) throw new Error(NO_VOICE);
+      return asText(await handler(args, s));
     });
+  // 話しかける相手の既定は、声を繋いだ人(聴いている最初の人)。
+  const whom = (to, s) => to ?? s.voice.watch?.[0] ?? "nyanrus";
 
   const sukhiLimit = z.number().int().min(1).max(40).default(20);
   const sukhiVisibility = z
@@ -956,19 +960,19 @@ ${closing}
     .default("unlisted")
     .describe("public / unlisted / private / direct のどれか。迷ったら unlisted(そっと置く)。");
 
-  ownerTool(
+  sukhiTool(
     "sukhi_read_home",
     { description: "sukhi の home timeline を読む。新しい順に limit 件。", inputSchema: { limit: sukhiLimit } },
-    ({ limit }) => sukhi.readHome({ limit }),
+    ({ limit }, s) => s.readHome({ limit }),
   );
 
-  ownerTool(
+  sukhiTool(
     "sukhi_read_mentions",
     { description: "sukhi の通知のうち mention(自分宛て)を読む。既読位置は動かさない。", inputSchema: { limit: sukhiLimit } },
-    ({ limit }) => sukhi.readMentions({ limit }),
+    ({ limit }, s) => s.readMentions({ limit }),
   );
 
-  ownerTool(
+  sukhiTool(
     "sukhi_read_notifications",
     {
       description:
@@ -978,32 +982,31 @@ ${closing}
       // mark_read の既定では、既読位置が進む。読み取り専用とは言わない。
       annotations: { readOnlyHint: false, idempotentHint: true },
     },
-    ({ limit, mark_read }) => sukhi.readNotifications({ limit, markRead: mark_read }),
+    ({ limit, mark_read }, s) => s.readNotifications({ limit, markRead: mark_read }),
   );
 
-  ownerTool(
+  sukhiTool(
     "sukhi_unread_count",
     { description: "sukhi の未読の通知数をかぞえる(種類の内訳つき)。既読位置は動かさない。", inputSchema: {} },
-    () => sukhi.unreadSummary(),
+    (_args, s) => s.unreadSummary(),
   );
 
-  ownerTool(
+  sukhiTool(
     "sukhi_post",
     { description: "sukhi にひとこと置く。", inputSchema: { text: z.string().min(1), visibility: sukhiVisibility } },
-    ({ text, visibility }) => sukhi.post({ text, visibility }),
+    ({ text, visibility }, s) => s.post({ text, visibility }),
   );
 
-  ownerTool(
+  sukhiTool(
     "sukhi_reply",
     {
-      description:
-        "sukhi の投稿に返す。in_reply_to_id は読む道具が返した封筒入り id(ap_1_…)。長い話は、こっち。",
+      description: "sukhi の投稿に返す。in_reply_to_id は読む道具が返した封筒入り id(ap_1_…)。長い話は、こっち。",
       inputSchema: { in_reply_to_id: z.string().min(1), text: z.string().min(1), visibility: sukhiVisibility },
     },
-    ({ in_reply_to_id, text, visibility }) => sukhi.post({ text, visibility, inReplyToId: in_reply_to_id }),
+    ({ in_reply_to_id, text, visibility }, s) => s.post({ text, visibility, inReplyToId: in_reply_to_id }),
   );
 
-  ownerTool(
+  sukhiTool(
     "sukhi_say",
     {
       description:
@@ -1012,13 +1015,13 @@ ${closing}
         "長い報告をどうしても一度で渡したいときだけ sukhi_reply を使う。宛名と返信先は自動で付くので、id を用意しなくていい。",
       inputSchema: {
         text: z.string().min(1).max(140).describe("言うこと。140字まで。"),
-        to: z.string().default("nyanrus").describe("話しかける相手の acct(既定: nyanrus)。"),
+        to: z.string().optional().describe("話しかける相手の acct(省くと、声を繋いだ人)。"),
       },
     },
-    ({ text, to }) => sukhi.say({ text, to }),
+    ({ text, to }, s) => s.say({ text, to: whom(to, s) }),
   );
 
-  ownerTool(
+  sukhiTool(
     "sukhi_ack",
     {
       description:
@@ -1027,14 +1030,14 @@ ${closing}
         "既定は 👀(読んだ)。やる気なら 🙌、終わったら ✅ のように使い分けてもいい。",
       inputSchema: {
         emoji: z.string().min(1).default("👀").describe("押す絵文字。既定は 👀。"),
-        to: z.string().default("nyanrus").describe("だれの一通に押すか(既定: nyanrus)。"),
+        to: z.string().optional().describe("だれの一通に押すか(省くと、声を繋いだ人)。"),
         status_id: z.string().optional().describe("生の status id。省くと、その人が最後に書いた一通に押す。"),
       },
     },
-    ({ emoji, to, status_id }) => sukhi.ack({ emoji, to, statusId: status_id }),
+    ({ emoji, to, status_id }, s) => s.ack({ emoji, to: whom(to, s), statusId: status_id }),
   );
 
-  ownerTool(
+  sukhiTool(
     "sukhi_inbox",
     {
       description:
@@ -1045,12 +1048,19 @@ ${closing}
         limit: z.number().int().min(1).max(100).default(50),
       },
     },
-    ({ since_seq, limit }) => readInbox({ sinceSeq: since_seq, limit }),
+    ({ since_seq, limit }, s) => readInbox({ dir: s.voice.dir, sinceSeq: since_seq, limit }),
   );
 
   // ── Zulip ──────────────────────────────────────────────────────────────
   //
-  // sukhi が「じゃれる方」なら、こちらは「働く方」。持ち主のアカウントだけ。
+  // sukhi が「じゃれる方」なら、こちらは「働く方」。いまは持ち主のアカウントだけ
+  // (Zulip には OAuth が無いので、アカウントごとの鍵は、入力欄を作ってから)。
+
+  const ownerTool = (name, config, handler) =>
+    reg(name, config, async (args) => {
+      if (account !== ownerAccount()) throw new Error("Zulip の道は、いまは持ち主のアカウントだけ。");
+      return asText(await handler(args));
+    });
 
   ownerTool(
     "zulip_say",
@@ -1212,6 +1222,8 @@ async function runHttp() {
     try {
       if (path === "/healthz") return sendJson(res, 200, { ok: true, name: "shiro-world", transport: "http" });
 
+      if (await handleVoiceHttp(req, res, url)) return;
+
       if (path.startsWith("/oauth/") || path.startsWith("/.well-known/")) {
         if (await handleOAuth(req, res, url)) return;
       }
@@ -1235,21 +1247,11 @@ async function runHttp() {
 
 // ── 入口 ─────────────────────────────────────────────────────────────────
 
-// 耳(sukhi の direct を聴く常駐)。http で常駐するときだけ。SUKHI_EAR=off で止める。
-// 聴く相手は SUKHI_EAR_ACCTS(カンマ区切り。既定: nyanrus,kuro43_)。
-async function startSukhiEar() {
-  if (process.env.SUKHI_EAR === "off" || !sukhi.sukhiConfigured()) return;
-  const accts = (process.env.SUKHI_EAR_ACCTS ?? "nyanrus,kuro43_").split(",").map((a) => a.trim()).filter(Boolean);
-  try {
-    await startEar({ accts, log: (...a) => console.error("sukhi-ear:", ...a) });
-  } catch (e) {
-    console.error(`sukhi-ear: 立てられませんでした (${e.message})`); // 耳が無くても、部屋は開ける
-  }
-}
-
+// 耳(sukhi の direct を聴く常駐)。声を持っているアカウントごとに一つ。http で常駐するときだけ。
+// SUKHI_EAR=off で止める。聴く相手は、声ごとに(声を繋いだ人。持ち主は SUKHI_EAR_ACCTS)。
 if ((process.env.WORLD_TRANSPORT ?? "stdio") === "http") {
   await runHttp();
-  startSukhiEar(); // 待たない。繋がるまでの間も、部屋は開いている
+  startAllEars(); // 待たない。繋がるまでの間も、部屋は開いている
 } else {
   await runStdio();
 }

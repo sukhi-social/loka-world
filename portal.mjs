@@ -27,6 +27,7 @@ import {
 import { room } from "./room.mjs";
 import { STATE_DIR } from "./paths.mjs";
 import { readonlyTools, setReadonlyTools } from "./settings.mjs";
+import { loadVoice } from "./voice.mjs";
 import { state } from "./state.mjs";
 import { CHOOSABLE_TOOLS, toolLabel } from "./tools.mjs";
 import { escapeHtml, originOf, page, parseCookies, readBody, sendHtml, sendJson } from "./web.mjs";
@@ -358,7 +359,31 @@ function loginPage(message, req) {
 }
 
 // アカウントごとの設定。いまは「読み取り専用と申告する道具」だけ。
-function settingsPage(account, saved) {
+function voiceSection(account, note) {
+  const v = loadVoice(account);
+  const notes = { connected: "声を繋ぎました。", dropped: "声を外しました。" };
+  const status = !v
+    ? `<p class="muted">まだ繋がっていません。ボットのアカウントで sukhi にログインすると、その声で話せます。</p>`
+    : v.connectedAt === "env"
+      ? `<p>サーバーの設定の声(持ち主)で繋がっています。</p>`
+      : `<p>@${escapeHtml(v.acct ?? "?")} の声で繋がっています。<span class="muted">(${escapeHtml(v.connectedAt)})</span></p>
+         <p class="muted">聴いている相手: ${v.watch?.length ? v.watch.map((a) => `@${escapeHtml(a)}`).join(" ") : "なし"}</p>`;
+  const disconnect =
+    v && v.connectedAt !== "env"
+      ? `<form method="post" action="/voice/disconnect"><p><button type="submit">声を外す</button></p></form>`
+      : "";
+  return `
+  <div class="card">
+    <h2>声(sukhi)</h2>
+    ${notes[note] ? `<p class="muted">${notes[note]}</p>` : ""}
+    ${status}
+    <p><a href="/voice/connect">${v && v.connectedAt !== "env" ? "別のボットで繋ぎなおす" : "声を繋ぐ"}</a>
+      <span class="muted">(sukhi にボットのアカウントでログインします。投稿と DM の許可を頼みます)</span></p>
+    ${disconnect}
+  </div>`;
+}
+
+function settingsPage(account, saved, voiceNote) {
   const current = new Set(readonlyTools(account));
   const rows = CHOOSABLE_TOOLS.map((name) => {
     const on = current.has(name) ? " checked" : "";
@@ -376,6 +401,7 @@ function settingsPage(account, saved) {
       <p><button type="submit">保存する</button></p>
     </form>
   </div>
+  ${voiceSection(account, voiceNote)}
   <p><a href="/">窓口へ戻る</a></p>`;
   return page(200, "設定", body);
 }
@@ -694,7 +720,7 @@ export async function handlePortal(req, res, url) {
 
   // アカウントごとの設定。読み取り専用と申告する道具を選ぶ。
   if (path === "/settings" && req.method === "GET") {
-    return sendHtml(res, settingsPage(account, url.searchParams.get("saved") === "1")), true;
+    return sendHtml(res, settingsPage(account, url.searchParams.get("saved") === "1", url.searchParams.get("voice"))), true;
   }
 
   if (path === "/settings" && req.method === "POST") {

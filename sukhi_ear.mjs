@@ -15,8 +15,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { STATE_DIR } from "./paths.mjs";
-import { api, streamUrl } from "./sukhi.mjs";
 import { conversationIsWith, decide, decideStatus } from "./sukhi_filter.mjs";
 import { heardFrom } from "./sukhi_text.mjs";
 
@@ -36,6 +34,7 @@ function newer(a, b) {
 
 // ── 控え ─────────────────────────────────────────────────────────────────
 //
+// 声(voice.mjs)の置き場の中に、三つ:
 //   sukhi_inbox.jsonl  聞いた一通ずつ(seq つき)。出ていったぶん(itta)も。
 //   sukhi_heard.json   人ごとに、最後に聞いた一通。sukhi_say / sukhi_ack の返す先。
 //   sukhi_ear.json     どこまで見たか(lastSeen)。
@@ -68,7 +67,7 @@ const readLines = (path) =>
         })
     : [];
 
-export function fileStore(dir = STATE_DIR) {
+export function fileStore(dir) {
   const inbox = join(dir, "sukhi_inbox.jsonl");
   const earFile = join(dir, "sukhi_ear.json");
   const heardFile = join(dir, "sukhi_heard.json");
@@ -104,7 +103,7 @@ export function fileStore(dir = STATE_DIR) {
 }
 
 // 控えを読む。since より後ろの、古いほうから limit 件。
-export function readInbox({ sinceSeq = 0, limit = 50, dir = STATE_DIR } = {}) {
+export function readInbox({ dir, sinceSeq = 0, limit = 50 }) {
   const rows = readLines(join(dir, "sukhi_inbox.jsonl")).filter((e) => e.seq > sinceSeq);
   return { events: rows.slice(0, limit), has_more: rows.length > limit };
 }
@@ -284,7 +283,7 @@ export function createEar({ api, watched, me, store, log = () => {} }) {
 
 // 名簿を actor URI に直す。引けなかった人は黙って外す
 // ── まだアカウントを作っていない相手を、名前だけ並べておけるように。
-async function lookupWatched(accts, log) {
+async function lookupWatched(api, accts, log) {
   const out = [];
   for (const acct of accts) {
     try {
@@ -297,12 +296,19 @@ async function lookupWatched(accts, log) {
   return out;
 }
 
-/** 耳を立てる。切れたら、黙って繋ぎ直す(切断そのものは出来事ではない)。 */
-export async function startEar({ accts, log = console.error, store = fileStore() } = {}) {
-  const watched = await lookupWatched(accts, log);
+/**
+ * 耳を立てる。切れたら、黙って繋ぎ直す(切断そのものは出来事ではない)。
+ * @param {object} o
+ * @param {ReturnType<import("./sukhi.mjs").createSukhi>} o.sukhi  この耳の声
+ * @param {string[]} o.accts  聴く相手
+ * @param {string} o.dir      控えの置き場(声の dir)
+ */
+export async function startEar({ sukhi, accts, dir, log = console.error }) {
+  const { api, streamUrl } = sukhi;
+  const watched = await lookupWatched(api, accts, log);
   if (watched.length === 0) throw new Error("見る相手が一人も引けませんでした");
   const me = (await api("/api/v1/accounts/verify_credentials")).id;
-  const ear = createEar({ api, watched, me, store, log });
+  const ear = createEar({ api, watched, me, store: fileStore(dir), log });
   log(`耳: ${watched.map((w) => `@${w.acct}`).join(" ")}  最後=${ear.lastSeen() ?? "(まだ何も)"}`);
 
   let backoff = 1000;

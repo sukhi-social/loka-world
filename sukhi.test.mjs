@@ -1,22 +1,28 @@
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { join } from "node:path";
 import test from "node:test";
 
 const dir = `${process.env.TMPDIR ?? "/tmp"}/loka-sukhi-test-${process.pid}`;
 process.env.WORLD_DATA = dir;
+const voiceDir = join(dir, "voice");
 
 // 偽の sukhi。会話と文脈を、テストごとに差し替える。
 const calls = [];
 let conversations = [];
 let context = { ancestors: [] };
+let tokenOk = (t) => t === "t"; // 401 を返すかどうかは、テストごとに差し替える
 
 const fake = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
   req.on("end", () => {
-    calls.push({ method: req.method, path: req.url, body: body ? JSON.parse(body) : undefined });
+    const bearer = (req.headers.authorization ?? "").replace(/^Bearer /, "");
+    calls.push({ method: req.method, path: req.url, bearer, body: body && req.headers["content-type"] === "application/json" ? JSON.parse(body) : body || undefined });
     const send = (v) => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(v));
+    if (req.url === "/oauth/token") return send({ access_token: "t2", refresh_token: "r2" });
+    if (!tokenOk(bearer)) return res.writeHead(401).end("{}");
     if (req.url === "/api/v1/accounts/verify_credentials") return send({ id: "me" });
     if (req.url.startsWith("/api/v1/conversations")) return send(conversations);
     if (req.url.endsWith("/context")) return send(context);
@@ -25,18 +31,21 @@ const fake = createServer((req, res) => {
   });
 });
 await new Promise((r) => fake.listen(0, "127.0.0.1", r));
-process.env.MASTODON_API_BASE_URL = `http://127.0.0.1:${fake.address().port}`;
-process.env.MASTODON_ACCESS_TOKEN = "t";
+const base = `http://127.0.0.1:${fake.address().port}`;
 
-const { say, ack, sukhiConfigured, trimHtml } = await import("./sukhi.mjs");
+const { createSukhi, trimHtml } = await import("./sukhi.mjs");
+const makeVoice = (extra = {}) => ({ base, accessToken: "t", dir: voiceDir, ...extra });
+let sukhi = createSukhi(makeVoice());
+const say = (a) => sukhi.say({ to: "nyanrus", ...a });
+const ack = (a) => sukhi.ack({ to: "nyanrus", ...a });
 
 const convo = (accounts, last) => ({ accounts: accounts.map((acct) => ({ acct })), last_status: last });
 const reset = () => {
   calls.length = 0;
-  rmSync(`${dir}/state`, { recursive: true, force: true });
+  tokenOk = (t) => t === "t";
+  sukhi = createSukhi(makeVoice());
+  rmSync(voiceDir, { recursive: true, force: true });
 };
-
-test("繋がっているか", () => assert.equal(sukhiConfigured(), true));
 
 test("相手が最後なら、その一通に返す", async () => {
   reset();
@@ -77,8 +86,8 @@ test("三人の会話には、ぶら下がらない", async () => {
 
 test("bridge が聞いた一通があれば、会話より先にそちらへ返す", async () => {
   reset();
-  mkdirSync(`${dir}/state`, { recursive: true });
-  writeFileSync(`${dir}/state/sukhi_heard.json`, JSON.stringify({ nyanrus: { status_id: "heard" } }));
+  mkdirSync(voiceDir, { recursive: true });
+  writeFileSync(`${voiceDir}/sukhi_heard.json`, JSON.stringify({ nyanrus: { status_id: "heard" } }));
   conversations = [convo(["nyanrus"], { id: "newer", account: { id: "them" } })];
   await say({ text: "聞こえたよ" });
   assert.equal(calls.find((c) => c.path === "/api/v1/statuses").body.in_reply_to_id, "heard");
@@ -99,6 +108,27 @@ test("ack は、相手の発言が無ければ押さずに伝える", async () =
   const r = await ack({});
   assert.match(r.error, /見つかりませんでした/);
   assert.equal(calls.some((c) => c.method === "PUT"), false);
+});
+
+test("401 なら、取り直して保存し、一度だけやり直す", async () => {
+  reset();
+  const saved = [];
+  sukhi = createSukhi(
+    makeVoice({ refreshToken: "r", clientId: "id", clientSecret: "sec", account: "x" }),
+    (v) => saved.push({ accessToken: v.accessToken, refreshToken: v.refreshToken }),
+  );
+  tokenOk = (t) => t === "t2";
+  conversations = [convo(["nyanrus"], { id: "s1", account: { id: "them" } })];
+  await ack({});
+  assert.deepEqual(saved, [{ accessToken: "t2", refreshToken: "r2" }]);
+  assert.equal(calls.find((c) => c.path === "/oauth/token").body.includes("grant_type=refresh_token"), true);
+  assert.equal(calls.at(-1).bearer, "t2");
+});
+
+test("取り直せない声では、401 をそのまま伝える", async () => {
+  reset();
+  tokenOk = () => false;
+  await assert.rejects(() => ack({}), /HTTP 401/);
 });
 
 test("trimHtml はタグを落として、長ければ切る", () => {

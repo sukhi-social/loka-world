@@ -49,28 +49,42 @@ const issues = JSON.parse(document.getElementById("loka-bundle-issues").textCont
 
 The source page can keep a relative-fetch fallback for local previews.
 
-## sukhi and Zulip (`sukhi_*`, `zulip_*`)
+## Voices: sukhi and Zulip (`sukhi_*`, `zulip_*`)
 
-Tools for Shiro's voice outside the room. They work for the owner account only, and the secrets live
-in the server environment (never in the room).
+Every loka account can have its own **voice**: a bot account on sukhi that its tools speak as. On the
+settings page (`/settings`) press "声を繋ぐ" and log in to sukhi **as the bot account**; loka asks for
+`read write` through a separate sukhi app (`state/sukhi_voice_app.json`, so the plain login stays light),
+keeps the bot's token in `state/voices/<account>/voice.json` (mode 0600), and starts an ear for it
+right away. When sukhi hands back a refresh token the voice renews itself. "声を外す" removes it.
+The account that comes back from sukhi must be the one that went out (the state is signed and expires
+in 10 minutes), so one account can never attach a voice to another.
+
+The owner account may also take its voice from the server environment, which is used only until a
+voice is connected on the settings page:
 
 | Variable | Used for |
 | --- | --- |
-| `MASTODON_API_BASE_URL`, `MASTODON_ACCESS_TOKEN` | sukhi. Without them the tools say they are not connected. |
-| `MASTODON_CLIENT_ID`, `MASTODON_CLIENT_SECRET`, `MASTODON_REFRESH_TOKEN`, `MASTODON_SCOPE` | Optional. On a 401 the access token is refreshed and kept in `state/sukhi_token.json`. |
-| `ZULIP_SITE`, `ZULIP_EMAIL`, `ZULIP_API_KEY` | Zulip (the same three values as `.zuliprc`). |
-| `SUKHI_EAR_ACCTS` | Whose DMs the ear listens to. Default `nyanrus,kuro43_`. `SUKHI_EAR=off` turns the ear off. |
+| `MASTODON_API_BASE_URL`, `MASTODON_ACCESS_TOKEN` | The owner's sukhi voice. |
+| `MASTODON_CLIENT_ID`, `MASTODON_CLIENT_SECRET`, `MASTODON_REFRESH_TOKEN`, `MASTODON_SCOPE` | Optional. On a 401 the token is refreshed and kept in the voice file. |
+| `SUKHI_EAR_ACCTS` | Whose DMs the owner's ear listens to. Default `nyanrus,kuro43_`. (A connected voice listens to the person who connected it.) |
+| `SUKHI_EAR=off` | No ears at all. |
+| `SUKHI_VOICE_CLIENT_ID`, `SUKHI_VOICE_CLIENT_SECRET`, `SUKHI_VOICE_REDIRECT_URI` | Use a fixed sukhi app for voices instead of registering one. |
+| `ZULIP_SITE`, `ZULIP_EMAIL`, `ZULIP_API_KEY` | Zulip (the same three values as `.zuliprc`). Owner account only for now: Zulip has no OAuth, so a per-account key needs a form. |
 
-Reading tools are L6, tools that put words out (`sukhi_post`, `sukhi_reply`, `sukhi_say`, `sukhi_ack`,
+Reading tools are L6; tools that put words out (`sukhi_post`, `sukhi_reply`, `sukhi_say`, `sukhi_ack`,
 `zulip_say`) are L5. `sukhi_say` is limited to 140 characters on purpose: a DM is a conversation.
+A client that runs without a person (a scheduled agent) may stop at an L5 tool to ask for a confirmation
+nobody can give. Marking a tool read-only on the settings page skips that confirmation, so choose those
+deliberately.
 
-With the http server, the **ear** (`sukhi_ear.mjs`) listens to sukhi's direct stream, catches up on what
-came while the server was down, and keeps what it heard in `state/sukhi_inbox.jsonl` (read it with
-`sukhi_inbox`). It never replies. The line it last heard from each person is kept in
-`state/sukhi_heard.json`, and `sukhi_say` / `sukhi_ack` answer that line. Which DMs count is decided by
-`sukhi_filter.mjs` alone: direct, two people only, written by the person themself.
+With the http server, each voice has an **ear** (`sukhi_ear.mjs`): it listens to sukhi's direct stream,
+catches up on what came while the server was down, and keeps what it heard in
+`state/voices/<account>/sukhi_inbox.jsonl` (read it with `sukhi_inbox`). It never replies. The line it
+last heard from each person is in `sukhi_heard.json` next to it, and `sukhi_say` / `sukhi_ack` answer that
+line. Which DMs count is decided by `sukhi_filter.mjs` alone: direct, two people only, written by the
+person themself.
 
-Tests: `node --test` (the ear and the sukhi/Zulip clients run against fake servers).
+Tests: `node --test` (the clients, the ear and the connect flow run against fake servers).
 
 ## MCP feedback tickets
 
