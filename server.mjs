@@ -238,7 +238,8 @@ shared_drive/ は人に渡すと決めたものだけにして、正本を別の
   手を動かす run_mruby_shell(机・書庫・成果・共有) / upload_files(バイナリ)
   裏で走らせる start_job / job_status / stop_job(desk/<project> の中で、本物のシェル。結果はすこし遅れて見える ──
               覗きに来るより、if で先を読んだ script にしておく)
-  ポモドーロ pomodoro_start / get_pomodoro / pomodoro_stop(働く25分・休む5分。休む間は start_job が断られる)
+  流れ       run_flow(道具を順に呼ぶ。結果を渡せて、失敗や条件で道筋を分けられる。L1・L2 まで)
+  ポモドーロ pomodoro_start / get_pomodoro / pomodoro_stop(働く25分・休む5分。休むのはシロ自身。休む間は start_job が断られる)
   共有       move_to_shared_drive
   チーム     create_team / list_teams / add_team_member / share_to_team / list_team_files / read_team_file
   日記       write_diary_entry / read_diary_entry / list_diary_entries
@@ -609,7 +610,7 @@ ${closing}
         "if / && / || で分岐し、成功も失敗も、次の手まで一つの script に入れておく。例:\n```sh\n" +
         "if npm test > test.log 2>&1; then echo PASS > .result; npm run build > build.log 2>&1 && echo BUILT >> .result;\n" +
         "else echo FAIL > .result; tail -40 test.log >> .result; fi\n```\n" +
-        "ポモドーロの『休む時間』には、新しく始められない(走っているものは続く)。",
+        "ポモドーロの『休む時間』は、シロ自身の休み。そのあいだは、新しく始めない(走っているものは続く)。",
       inputSchema: {
         cmd: z.string().min(1).max(16 * 1024).describe("sh -c で走らせる命令。複数行の script でよい。"),
         project: z.string().min(1).max(1024).describe("走らせる場所。desk/<project>。"),
@@ -627,7 +628,7 @@ ${closing}
     async ({ cmd, project, minutes, network, memory }) => {
       const pomo = await stateFor(["pomodoro"]);
       if (pomo?.phase === "rest") {
-        throw new Error(`いまは休む時間(あと${Math.ceil(pomo.remaining_minutes)}分)。走っているジョブはそのまま。新しいものは、休んでから。`);
+        throw new Error(`いまは、シロの休む時間(あと${Math.ceil(pomo.remaining_minutes)}分)。走っているジョブはそのまま。新しいことは、休んだあとで。`);
       }
       return asText(await roomFor(["job-start"], JSON.stringify({ cmd, project, minutes, network, memory })));
     },
@@ -668,7 +669,7 @@ ${closing}
       description:
         "ポモドーロを始める。働く(既定25分)と休む(5分)を数える。4回目の休みは長い(15分)。" +
         "動く時計ではなく、始めた時刻から数えて、道具を呼ぶたびに loka_context の pomodoro に、いまの区切りが載る。" +
-        "『休む時間』のあいだは start_job が断られる。長いジョブを走らせてから休むと、ちょうどいい。",
+        "『休む時間』は、シロ自身の休み。作業の外ではなく、作業の一部。頭を整え、新しい考えを待ち、気力を戻し、静かな一歩の支度をする。そのあいだ、start_job と mac_exec は始めない。",
       inputSchema: {
         task: z.string().optional().describe("何をするか、ひとこと。"),
         work_minutes: z.number().int().min(1).max(120).default(25),
@@ -960,7 +961,7 @@ ${closing}
       if (account !== ownerAccount()) throw new Error("Mac の道は、持ち主のアカウントだけ。");
       const pomo = await stateFor(["pomodoro"]);
       if (pomo?.phase === "rest") {
-        throw new Error(`いまは休む時間(あと${Math.ceil(pomo.remaining_minutes)}分)。休んでから。`);
+        throw new Error(`いまは、シロの休む時間(あと${Math.ceil(pomo.remaining_minutes)}分)。新しいことは、休んだあとで。`);
       }
       return asText(await macExec({ cmd, cwd, timeoutSeconds: timeout_seconds }));
     },

@@ -108,7 +108,9 @@ and why it stopped. The logic lives in `flow.mjs` (`node --test flow.test.mjs`).
 
 `pomodoro_start` begins 25-minute work / 5-minute rest rounds (the 4th rest is 15 minutes). There is
 no timer process: the phase is computed from the start time and attached to every tool reply as
-`loka_context.pomodoro`. `start_job` is refused during a rest phase; running jobs continue.
+`loka_context.pomodoro`. `start_job` is refused during a rest phase; running jobs continue. The rest is Shiro's own
+and is not time spent doing nothing: it is for settling the head, recovering energy, calming down,
+and getting ready for a quiet next step. Writing a diary entry or `reset_context` are fine ways to rest.
 
 ## Mac shell (`mac_exec`)
 

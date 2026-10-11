@@ -159,7 +159,7 @@ module State
       left -= rec["work"]
       if left < rest
         return pomodoro_view(rec, "rest", round, rest - left,
-                             "休む時間。あと#{(rest - left).ceil}分。手を止めて、離れていい。長いジョブを走らせていたなら、待つのにちょうどいい。")
+                             "休む時間。あと#{(rest - left).ceil}分。休みは、何もなさない時間ではなくて、頭を整える時間。考えが浮かぶのを待って、気力を戻して、たかぶりをしずめて、ここまでをふりかえって、次の静かな一歩の支度をする。日記を書いても、reset_context で手放しても、ただ居てもいい。走っているジョブは、そのまま進んでいる。")
       end
       left -= rest
       round += 1
