@@ -56,6 +56,9 @@ settings page (`/settings`) press "声を繋ぐ" and log in to sukhi **as the bo
 `read write` through a separate sukhi app (`state/sukhi_voice_app.json`, so the plain login stays light),
 keeps the bot's token in `state/voices/<account>/voice.json` (mode 0600), and starts an ear for it
 right away. When sukhi hands back a refresh token the voice renews itself. "声を外す" removes it.
+Instead of logging in, you can paste the bot's access token (it needs `read write`) into the same
+page. loka only asks sukhi who it belongs to, keeps it as the voice, and never shows it again; a token
+voice has no refresh token, so it lasts as long as the token does.
 The account that comes back from sukhi must be the one that went out (the state is signed and expires
 in 10 minutes), so one account can never attach a voice to another.
 

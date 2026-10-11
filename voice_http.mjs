@@ -2,6 +2,7 @@
 //
 //   GET  /voice/connect                 窓口の設定ページから。sukhi の同意へ(read write の、声専用アプリ)
 //   GET  /oauth/sukhi/voice-callback    sukhi からの戻り。token をしまって、耳を立てる
+//   POST /voice/token                   ログインの代わりに、token を貼って繋ぐ(ボットの access token)
 //   POST /voice/disconnect              声を外す(聞いた控えは残る)
 //
 // 戻ってきたとき、「いま窓口に入っている人」が「繋ぎにいった人」と同じかを必ず確かめる。
@@ -11,10 +12,10 @@ import { accountFrom, signState, verifyState, visitOk } from "./auth.mjs";
 import { sukhiAuthorizeUrl, sukhiBase, sukhiExchange, sukhiVerify } from "./sukhi_login.mjs";
 import { ensureEar, stopEar } from "./sukhi_ears.mjs";
 import { dropVoice, saveVoice } from "./voice.mjs";
-import { escapeHtml, originOf, page, parseCookies, sendHtml } from "./web.mjs";
+import { escapeHtml, originOf, page, parseCookies, readBody, sendHtml } from "./web.mjs";
 
 const STATE_TTL_MS = 10 * 60 * 1000;
-const PATHS = new Set(["/voice/connect", "/voice/disconnect", "/oauth/sukhi/voice-callback"]);
+const PATHS = new Set(["/voice/connect", "/voice/token", "/voice/disconnect", "/oauth/sukhi/voice-callback"]);
 
 const back = (res, query) => {
   res.writeHead(302, { location: `/settings?${query}` });
@@ -26,6 +27,27 @@ const fail = (res, status, message) => {
   sendHtml(res, page(status, "声を繋ぐ", `<div class="card"><p>${escapeHtml(message)}</p></div><p><a href="/settings">設定へ戻る</a></p>`));
   return true;
 };
+
+// token を sukhi に確かめて(誰の声か)、その人の部屋にしまって、耳を立てる。
+async function connect(account, { accessToken, refreshToken = null, clientId = null, clientSecret = null, scope = null, via }) {
+  const me = await sukhiVerify(accessToken);
+  const acct = String(me.acct ?? "").replace(/^@/, "");
+  saveVoice(account, {
+    base: sukhiBase(),
+    accessToken,
+    refreshToken,
+    clientId,
+    clientSecret,
+    scope,
+    acct,
+    via,
+    // 聴く相手は、声を繋いだ人。ボットが自分自身で繋いだなら、聴く相手は居ない。
+    watch: acct.toLowerCase() === account.toLowerCase() ? [] : [account],
+    connectedAt: new Date().toISOString(),
+  });
+  ensureEar(account).catch(() => {}); // 待たない。立てられなくても、声は繋がっている
+  return acct;
+}
 
 export async function handleVoiceHttp(req, res, url) {
   const path = url.pathname;
@@ -68,24 +90,30 @@ export async function handleVoiceHttp(req, res, url) {
 
     try {
       const tok = await sukhiExchange({ origin: originOf(req), code: p.get("code"), kind: "voice" });
-      const me = await sukhiVerify(tok.access_token);
-      const acct = String(me.acct ?? "").replace(/^@/, "");
-      saveVoice(account, {
-        base: sukhiBase(),
+      await connect(account, {
         accessToken: tok.access_token,
         refreshToken: tok.refresh_token ?? null,
         clientId: tok.client_id,
         clientSecret: tok.client_secret,
         scope: tok.scope,
-        acct,
-        // 聴く相手は、声を繋いだ人。ボットが自分自身で繋いだなら、聴く相手は居ない。
-        watch: acct.toLowerCase() === account.toLowerCase() ? [] : [account],
-        connectedAt: new Date().toISOString(),
+        via: "login",
       });
-      ensureEar(account).catch(() => {}); // 待たない。立てられなくても、声は繋がっている
       return back(res, "voice=connected");
     } catch (e) {
       return fail(res, 502, `声を繋げませんでした: ${e.message}`);
+    }
+  }
+
+  // ログインの代わりに、ボットの access token を貼って繋ぐ。token は、確かめるだけで、画面にも控えにも出さない。
+  if (path === "/voice/token" && req.method === "POST") {
+    const token = new URLSearchParams(await readBody(req)).get("token")?.trim();
+    if (!token) return fail(res, 400, "token が空です。");
+    try {
+      await connect(account, { accessToken: token, via: "token" });
+      return back(res, "voice=connected");
+    } catch (e) {
+      // e.message に token は入らない(HTTP の状態だけ)。それでも、貼られた値は返さない。
+      return fail(res, 400, `その token では繋げませんでした(${e.message})。read と write の許可がある access token か、確かめてください。`);
     }
   }
 

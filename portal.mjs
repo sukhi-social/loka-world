@@ -366,7 +366,7 @@ function voiceSection(account, note) {
     ? `<p class="muted">まだ繋がっていません。ボットのアカウントで sukhi にログインすると、その声で話せます。</p>`
     : v.connectedAt === "env"
       ? `<p>サーバーの設定の声(持ち主)で繋がっています。</p>`
-      : `<p>@${escapeHtml(v.acct ?? "?")} の声で繋がっています。<span class="muted">(${escapeHtml(v.connectedAt)})</span></p>
+      : `<p>@${escapeHtml(v.acct ?? "?")} の声で繋がっています。<span class="muted">(${escapeHtml(v.connectedAt)}${v.via === "token" ? "、token" : ""})</span></p>
          <p class="muted">聴いている相手: ${v.watch?.length ? v.watch.map((a) => `@${escapeHtml(a)}`).join(" ") : "なし"}</p>`;
   const disconnect =
     v && v.connectedAt !== "env"
@@ -380,6 +380,15 @@ function voiceSection(account, note) {
     <p><a href="/voice/connect">${v && v.connectedAt !== "env" ? "別のボットで繋ぎなおす" : "声を繋ぐ"}</a>
       <span class="muted">(sukhi にボットのアカウントでログインします。投稿と DM の許可を頼みます)</span></p>
     ${disconnect}
+    <details>
+      <summary class="muted">ログインの代わりに、token を貼って繋ぐ</summary>
+      <form method="post" action="/voice/token">
+        <p class="muted">ボットの access token(read と write の許可つき)。確かめるだけで、画面には出しません。
+          サーバーには、声の鍵として、このアカウントの部屋にだけしまいます。</p>
+        <input type="password" name="token" autocomplete="off" placeholder="access token">
+        <p><button type="submit">この token で繋ぐ</button></p>
+      </form>
+    </details>
   </div>`;
 }
 

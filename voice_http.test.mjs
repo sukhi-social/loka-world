@@ -17,6 +17,7 @@ const sukhi = createServer((req, res) => {
   req.on("end", () => {
     seen.push({ method: req.method, path: req.url, body });
     res.setHeader("content-type", "application/json");
+    if ((req.headers.authorization ?? "") === "Bearer bad-token") return res.writeHead(401).end("{}");
     if (req.url === "/api/v1/apps") return res.end(JSON.stringify({ client_id: "cid", client_secret: "csec" }));
     if (req.url === "/oauth/token") return res.end(JSON.stringify({ access_token: "bot-token", refresh_token: "bot-refresh" }));
     if (req.url === "/api/v1/accounts/verify_credentials") return res.end(JSON.stringify({ acct: "shiro_bot" }));
@@ -42,7 +43,13 @@ const cookieFor = (account) =>
   [visitCookieHeader(fakeReq), accountCookieHeader(fakeReq, account)].map((c) => c.split(";")[0]).join("; ");
 const get = (path, account) =>
   fetch(base + path, { redirect: "manual", headers: account ? { cookie: cookieFor(account) } : {} });
-const post = (path, account) => fetch(base + path, { method: "POST", redirect: "manual", headers: { cookie: cookieFor(account) } });
+const post = (path, account, form) =>
+  fetch(base + path, {
+    method: "POST",
+    redirect: "manual",
+    headers: { cookie: cookieFor(account), ...(form ? { "content-type": "application/x-www-form-urlencoded" } : {}) },
+    body: form ? new URLSearchParams(form).toString() : undefined,
+  });
 
 async function startConnect(account) {
   const r = await get("/voice/connect", account);
@@ -103,6 +110,27 @@ test("声を外す。ファイルは消える", async () => {
   const r = await post("/voice/disconnect", "kuro");
   assert.equal(r.headers.get("location"), "/settings?voice=dropped");
   assert.equal(loadVoice("kuro"), null);
+});
+
+test("token を貼って繋ぐ。ログインは通らない", async () => {
+  const before = seen.filter((s) => s.path === "/oauth/token").length;
+  const r = await post("/voice/token", "token_user", { token: "  pasted-token  " });
+  assert.equal(r.headers.get("location"), "/settings?voice=connected");
+  const v = loadVoice("token_user");
+  assert.deepEqual([v.accessToken, v.refreshToken, v.acct, v.via, v.watch], ["pasted-token", null, "shiro_bot", "token", ["token_user"]]);
+  assert.equal(seen.filter((s) => s.path === "/oauth/token").length, before); // OAuth の交換は使わない
+});
+
+test("通らない token では繋がず、貼られた値を返事に出さない", async () => {
+  const r = await post("/voice/token", "token_user2", { token: "bad-token" });
+  assert.equal(r.status, 400);
+  assert.equal((await r.text()).includes("bad-token"), false);
+  assert.equal(loadVoice("token_user2"), null);
+});
+
+test("空の token は断る。窓口に入っていない人も", async () => {
+  assert.equal((await post("/voice/token", "token_user3", { token: "   " })).status, 400);
+  assert.equal((await fetch(`${base}/voice/token`, { method: "POST", body: "token=x" })).status, 401);
 });
 
 test("声専用のアプリは、ログイン用とは別に登録される", () => {
