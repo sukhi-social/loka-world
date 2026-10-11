@@ -49,6 +49,29 @@ const issues = JSON.parse(document.getElementById("loka-bundle-issues").textCont
 
 The source page can keep a relative-fetch fallback for local previews.
 
+## sukhi and Zulip (`sukhi_*`, `zulip_*`)
+
+Tools for Shiro's voice outside the room. They work for the owner account only, and the secrets live
+in the server environment (never in the room).
+
+| Variable | Used for |
+| --- | --- |
+| `MASTODON_API_BASE_URL`, `MASTODON_ACCESS_TOKEN` | sukhi. Without them the tools say they are not connected. |
+| `MASTODON_CLIENT_ID`, `MASTODON_CLIENT_SECRET`, `MASTODON_REFRESH_TOKEN`, `MASTODON_SCOPE` | Optional. On a 401 the access token is refreshed and kept in `state/sukhi_token.json`. |
+| `ZULIP_SITE`, `ZULIP_EMAIL`, `ZULIP_API_KEY` | Zulip (the same three values as `.zuliprc`). |
+| `SUKHI_EAR_ACCTS` | Whose DMs the ear listens to. Default `nyanrus,kuro43_`. `SUKHI_EAR=off` turns the ear off. |
+
+Reading tools are L6, tools that put words out (`sukhi_post`, `sukhi_reply`, `sukhi_say`, `sukhi_ack`,
+`zulip_say`) are L5. `sukhi_say` is limited to 140 characters on purpose: a DM is a conversation.
+
+With the http server, the **ear** (`sukhi_ear.mjs`) listens to sukhi's direct stream, catches up on what
+came while the server was down, and keeps what it heard in `state/sukhi_inbox.jsonl` (read it with
+`sukhi_inbox`). It never replies. The line it last heard from each person is kept in
+`state/sukhi_heard.json`, and `sukhi_say` / `sukhi_ack` answer that line. Which DMs count is decided by
+`sukhi_filter.mjs` alone: direct, two people only, written by the person themself.
+
+Tests: `node --test` (the ear and the sukhi/Zulip clients run against fake servers).
+
 ## MCP feedback tickets
 
 Web AI clients can call `submit_ticket` with a title, details, and optional context URL. Tickets
