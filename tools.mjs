@@ -25,6 +25,7 @@ export const LEVELS = {
   fetch_url: 6, github_issues: 6, github_discussions: 6,
   sukhi_read_home: 6, sukhi_read_mentions: 6, sukhi_read_notifications: 6, sukhi_unread_count: 6,
   sukhi_post: 5, sukhi_reply: 5, sukhi_say: 5, sukhi_ack: 5,
+  zulip_read: 6, zulip_say: 5,
   mac_status: 1, mac_exec: 7,
 };
 
@@ -50,6 +51,7 @@ export const OPEN_WORLD = new Set([
   "fetch_url", "github_issues", "github_discussions",
   "sukhi_read_home", "sukhi_read_mentions", "sukhi_read_notifications", "sukhi_unread_count",
   "sukhi_post", "sukhi_reply", "sukhi_say", "sukhi_ack",
+  "zulip_read", "zulip_say",
 ]);
 
 // はじめから読み取り(L1/L6)のものは、切り替えの必要がない。

@@ -37,6 +37,7 @@ import { room } from "./room.mjs";
 import * as sukhi from "./sukhi.mjs";
 import { readonlyTools as accountReadonlyTools } from "./settings.mjs";
 import { state } from "./state.mjs";
+import * as zulip from "./zulip.mjs";
 import { withToolContext } from "./tool-context.mjs";
 import { flowRefusal, LEVELS, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
 import { originOf, sendJson } from "./web.mjs";
@@ -939,12 +940,12 @@ ${closing}
   // 読む道具は L6、置く・返す・言う道具は L5(外に出る)。id は ActivityPlug の封筒入り(ap_1_…)で、
   // 読む道具が返した id をそのまま sukhi_reply に渡す。
 
-  const sukhiOwnerOnly = () => {
-    if (account !== ownerAccount()) throw new Error("sukhi の道は、持ち主のアカウントだけ。");
+  const ownerOnly = () => {
+    if (account !== ownerAccount()) throw new Error("sukhi と Zulip の道は、持ち主のアカウントだけ。");
   };
-  const sukhiTool = (name, config, handler) =>
+  const ownerTool = (name, config, handler) =>
     reg(name, config, async (args) => {
-      sukhiOwnerOnly();
+      ownerOnly();
       return asText(await handler(args));
     });
 
@@ -954,19 +955,19 @@ ${closing}
     .default("unlisted")
     .describe("public / unlisted / private / direct のどれか。迷ったら unlisted(そっと置く)。");
 
-  sukhiTool(
+  ownerTool(
     "sukhi_read_home",
     { description: "sukhi の home timeline を読む。新しい順に limit 件。", inputSchema: { limit: sukhiLimit } },
     ({ limit }) => sukhi.readHome({ limit }),
   );
 
-  sukhiTool(
+  ownerTool(
     "sukhi_read_mentions",
     { description: "sukhi の通知のうち mention(自分宛て)を読む。既読位置は動かさない。", inputSchema: { limit: sukhiLimit } },
     ({ limit }) => sukhi.readMentions({ limit }),
   );
 
-  sukhiTool(
+  ownerTool(
     "sukhi_read_notifications",
     {
       description:
@@ -979,19 +980,19 @@ ${closing}
     ({ limit, mark_read }) => sukhi.readNotifications({ limit, markRead: mark_read }),
   );
 
-  sukhiTool(
+  ownerTool(
     "sukhi_unread_count",
     { description: "sukhi の未読の通知数をかぞえる(種類の内訳つき)。既読位置は動かさない。", inputSchema: {} },
     () => sukhi.unreadSummary(),
   );
 
-  sukhiTool(
+  ownerTool(
     "sukhi_post",
     { description: "sukhi にひとこと置く。", inputSchema: { text: z.string().min(1), visibility: sukhiVisibility } },
     ({ text, visibility }) => sukhi.post({ text, visibility }),
   );
 
-  sukhiTool(
+  ownerTool(
     "sukhi_reply",
     {
       description:
@@ -1001,7 +1002,7 @@ ${closing}
     ({ in_reply_to_id, text, visibility }) => sukhi.post({ text, visibility, inReplyToId: in_reply_to_id }),
   );
 
-  sukhiTool(
+  ownerTool(
     "sukhi_say",
     {
       description:
@@ -1016,7 +1017,7 @@ ${closing}
     ({ text, to }) => sukhi.say({ text, to }),
   );
 
-  sukhiTool(
+  ownerTool(
     "sukhi_ack",
     {
       description:
@@ -1030,6 +1031,42 @@ ${closing}
       },
     },
     ({ emoji, to, status_id }) => sukhi.ack({ emoji, to, statusId: status_id }),
+  );
+
+  // ── Zulip ──────────────────────────────────────────────────────────────
+  //
+  // sukhi が「じゃれる方」なら、こちらは「働く方」。持ち主のアカウントだけ。
+
+  ownerTool(
+    "zulip_say",
+    {
+      description:
+        "Zulip で言う。ここは働く方なので、140字の縛りは無い。" +
+        "**呼ばれた場所へ返す** ── 部屋(ストリーム)で呼ばれたなら stream と topic を、DM なら to を。",
+      inputSchema: {
+        text: z.string().min(1).describe("言うこと。"),
+        to: z.string().default("NyanRus").describe("DM で言うときの相手の名前かメール(既定: NyanRus)。"),
+        stream: z.string().optional().describe("部屋で言うときの、部屋の名前。例: general"),
+        topic: z.string().optional().describe("その部屋の、話題。stream と一緒に。"),
+      },
+    },
+    ({ text, to, stream, topic }) => zulip.say({ text, to, stream, topic }),
+  );
+
+  ownerTool(
+    "zulip_read",
+    {
+      description:
+        "Zulip を読む。**呼ばれた場所の話の流れを見るのは、これ。** " +
+        "stream を指定すると部屋のぶん(topic も添えると、その話題だけ)。to を指定するとその人との DM。どちらも省くと、みんな分の DM の直近。",
+      inputSchema: {
+        stream: z.string().optional().describe("読む部屋の名前。例: clips"),
+        topic: z.string().optional().describe("その部屋の話題。stream と一緒に。省くと部屋ぜんぶ。"),
+        to: z.string().optional().describe("この人との DM だけ読む。"),
+        limit: z.number().int().min(1).max(40).default(20),
+      },
+    },
+    ({ stream, topic, to, limit }) => zulip.read({ stream, topic, to, limit }),
   );
 
   // ── Mac を触る ─────────────────────────────────────────────────────────
