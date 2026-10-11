@@ -1,0 +1,63 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+# hako の口。 hako [--root DIR] [--json] <ls|cat|write|mkdir|mv|rm|run|serve|serving|stop|usage> ...
+#   hako ls [path]            hako cat path             hako write path (本文は stdin か --content)
+#   hako mkdir path           hako mv from to           hako rm path(.trash へ)
+#   hako run [--cwd d] [--timeout s] -- cmd args...     hako run [--cwd d] -c "sh の一行"
+#   hako serve --port N [--cwd d] -c "…"   箱の中で待つサーバを一つ立てる(止めるまで)
+#   hako serving / hako stop
+require_relative "../lib/hako"
+
+args = ARGV.dup
+opts = { root: ENV.fetch("HAKO_ROOT", File.expand_path("~/.shiro/hako/root")), json: false }
+opts[:json] = true if args.delete("--json")
+if (i = args.index("--root")) then opts[:root] = args[i + 1]; args.slice!(i, 2) end
+
+box = Hako::Box.new(root: opts[:root])
+cmd = args.shift
+
+emit = lambda do |v|
+  if opts[:json] then puts JSON.generate(v)
+  elsif v.is_a?(Array) then v.each { |e| puts "#{e[:type] == 'dir' ? 'd' : e[:type] == 'link' ? 'l' : '-'} #{e[:size].to_s.rjust(9)}  #{e[:name]}" }
+  elsif v.is_a?(Hash) && v.key?(:content) then print v[:content]; warn "…(切れた。#{v[:size]} バイト)" if v[:truncated]
+  elsif v.is_a?(Hash) && v.key?(:out) then print v[:out]; $stderr.print v[:err]; warn "(#{v[:timed_out] ? '時間切れ' : "status #{v[:status]}"}、#{v[:took]}s)"
+  else puts v.inspect
+  end
+end
+
+begin
+  result =
+    case cmd
+    when "ls" then box.ls(args[0] || ".")
+    when "cat" then box.cat(args[0])
+    when "write"
+      content = if (i = args.index("--content")) then args[i + 1] else $stdin.binmode.read end
+      box.write(args[0], content.to_s)
+    when "mkdir" then box.mkdir(args[0])
+    when "mv" then box.mv(args[0], args[1])
+    when "rm" then box.rm(args[0])
+    when "usage" then { bytes: box.usage, quota: box.quota }
+    when "run"
+      cwd = "."; timeout = nil
+      if (i = args.index("--cwd")) then cwd = args[i + 1]; args.slice!(i, 2) end
+      if (i = args.index("--timeout")) then timeout = args[i + 1].to_f; args.slice!(i, 2) end
+      command = if (i = args.index("-c")) then args[i + 1] elsif (i = args.index("--")) then args[(i + 1)..] else args end
+      box.run(command, cwd: cwd, timeout: timeout)
+    when "serve"
+      cwd = "."; port = nil
+      if (i = args.index("--cwd")) then cwd = args[i + 1]; args.slice!(i, 2) end
+      if (i = args.index("--port")) then port = args[i + 1].to_i; args.slice!(i, 2) end
+      raise Hako::Denied, "--port が要る" unless port
+      command = if (i = args.index("-c")) then args[i + 1] elsif (i = args.index("--")) then args[(i + 1)..] else args end
+      box.serve(command, port: port, cwd: cwd)
+    when "serving" then box.serving
+    when "stop" then box.stop
+    else
+      raise Hako::Denied, "知らない命令: #{cmd.inspect}(ls cat write mkdir mv rm run serve serving stop usage)"
+    end
+  emit.(result)
+  exit(result.is_a?(Hash) && result.key?(:status) && (result[:timed_out] || result[:status] != 0) ? 1 : 0)
+rescue Hako::Denied, Errno::ENOENT, Errno::EACCES => e
+  if opts[:json] then puts JSON.generate({ error: e.message }) else warn "hako: #{e.message}" end
+  exit 2
+end
