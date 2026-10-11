@@ -94,6 +94,16 @@ addresses. Use it to install dependencies, then run build and tests in a `networ
 If the runner is not available, `start_job` falls back to the Landlock sandbox (no network).
 Install on the host with `WORLD_BOX=rocky@HOST runner/install.sh`.
 
+## Flows
+
+`run_flow` calls other tools in order: `steps: [{ id?, tool, args?, when?, on_error? }]`. A step's
+result is available to later steps as `${id.result.x}` / `${id.ok}` / `${id.error}`. `when` skips a
+step unless its condition holds (`ref` with `eq` / `ne` / `gt` / `lt` / `contains` / `exists`, combined
+with `all` / `any` / `not`). `on_error` is `stop` (default) or `continue`, so a later `when` can
+branch on a failure. Only L1 and L2 tools can be called; `run_flow`, `run_mruby_shell`, the diary
+tools, `welcome`, and `upload_files` cannot. Nothing is rolled back: a stopped flow returns what ran
+and why it stopped. The logic lives in `flow.mjs` (`node --test flow.test.mjs`).
+
 ## Pomodoro
 
 `pomodoro_start` begins 25-minute work / 5-minute rest rounds (the 4th rest is 15 minutes). There is

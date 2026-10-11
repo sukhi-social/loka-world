@@ -29,6 +29,7 @@ import { z } from "zod";
 import "./paths.mjs"; // ROOM_ROOT / STATE_DIR を先に決める
 import { accessKey, bearerOk, oauthClient, ownerAccount, tokenAccount } from "./auth.mjs";
 import { fetchExternal, githubDiscussions, githubIssues } from "./external.mjs";
+import { MAX_STEPS, runFlow, validate } from "./flow.mjs";
 import { handleMac, macExec, macStatus } from "./mac.mjs";
 import { handleOAuth } from "./oauth.mjs";
 import { handlePortal } from "./portal.mjs";
@@ -36,7 +37,7 @@ import { room } from "./room.mjs";
 import { readonlyTools as accountReadonlyTools } from "./settings.mjs";
 import { state } from "./state.mjs";
 import { withToolContext } from "./tool-context.mjs";
-import { LEVELS, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
+import { flowRefusal, LEVELS, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
 import { originOf, sendJson } from "./web.mjs";
 
 const asText = (value) => {
@@ -108,7 +109,11 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
   // mruby script は指定範囲を書き換えられるので、破壊的操作として確認する。
   const DESTRUCTIVE = new Set(["run_mruby_shell", "start_job", "mac_exec"]);
 
+  // run_flow が名前で呼べるように、素の handler(結果のあとに context を足す前のもの)を覚えておく。
+  const registry = new Map();
+
   const reg = (name, config, handler) => {
+    registry.set(name, { handler, schema: z.object(config.inputSchema ?? {}) });
     const level = LEVELS[name] ?? 1;
     const label = LEVEL_LABEL[level];
     // L7(Mac のシェル)は、申告で確認を省けない。
@@ -529,6 +534,66 @@ ${closing}
     },
     async ({ code, paths, cwd }) =>
       asText(await roomFor(["mruby-shell"], JSON.stringify({ code, paths, cwd }))),
+  );
+
+  // ── 流れ(run_flow)────────────────────────────────────────────────────
+  //
+  // 道具の名前と引数を並べて、上から順に動かす。手順の結果は、あとの手順から使える。
+  // 呼べるのは L1・L2 の道具だけ(tools.mjs の flowRefusal)。段は混ぜない。
+
+  const textOf = (r) => (r?.content ?? []).map((c) => c?.text ?? "").join("\n");
+  const valueOf = (r) => {
+    const text = textOf(r);
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  };
+
+  reg(
+    "run_flow",
+    {
+      description:
+        "道具を、順に呼ぶ流れ。手順の結果を次に渡せて、失敗したときや条件で、道筋を分けられる。" +
+        `呼べるのは L1(読む)と L2(書く)の道具だけ。run_mruby_shell・日記・L3 以上は呼べない。手順は ${MAX_STEPS} まで。\n` +
+        "各手順: { id?, tool, args?, when?, on_error? }\n" +
+        "  id … 手順の名前。あとから ${id.result.xxx}(結果)/ ${id.ok}(成功したか)/ ${id.error}(失敗の理由)で使う。省くと s1, s2 …。\n" +
+        "  when … 合わなければ、その手順は飛ばす。{ ref: \"a.ok\" } / { ref: \"a.result.n\", gt: 3 }(eq ne gt lt contains exists)/ { all: [...] } { any: [...] } { not: {...} }。\n" +
+        "  on_error … \"stop\"(既定。失敗したらそこで止まる)か \"continue\"(失敗を記録して先へ。次の when で受ける)。\n" +
+        "例(読んで、無ければ足す):\n```json\n" +
+        '[{"id":"t","tool":"list_tasks"},\n' +
+        ' {"tool":"add_task","args":{"content":"続きを書く"},"when":{"ref":"t.result.tasks","eq":[]}}]\n```\n' +
+        "戻すことはしない。止まったら、そこまでの結果と理由を返す。",
+      inputSchema: {
+        steps: z
+          .array(
+            z.object({
+              id: z.string().max(40).optional().describe("手順の名前(英数字と _)。"),
+              tool: z.string().describe("呼ぶ道具の名前。"),
+              args: z.record(z.string(), z.unknown()).optional().describe("道具の引数。文字列の ${...} で前の結果を使える。"),
+              when: z.record(z.string(), z.unknown()).optional().describe("条件。合わなければ飛ばす。"),
+              on_error: z.enum(["stop", "continue"]).optional().describe("失敗したとき。既定は stop。"),
+            }),
+          )
+          .min(1)
+          .max(MAX_STEPS),
+      },
+    },
+    async ({ steps }, extra) => {
+      validate(steps, flowRefusal);
+      const call = async (name, args) => {
+        const tool = registry.get(name);
+        const parsed = tool.schema.safeParse(args);
+        if (!parsed.success) {
+          throw new Error(parsed.error.issues.map((i) => `${i.path.join(".") || "(args)"}: ${i.message}`).join(" / "));
+        }
+        const result = await tool.handler(parsed.data, extra);
+        if (result?.isError) throw new Error(textOf(result));
+        return valueOf(result);
+      };
+      return asText(await runFlow(steps, call));
+    },
   );
 
   reg(

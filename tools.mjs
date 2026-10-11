@@ -14,7 +14,7 @@ export const LEVELS = {
   welcome: 1, skill_loka_pace: 1, read_diary_entry: 1, list_diary_entries: 1,
   get_current_time: 1, get_focus_status: 1, get_status: 1, list_tasks: 1, get_rhythm_log: 1, job_status: 1, get_pomodoro: 1,
   list_teams: 1, list_team_members: 1, list_team_files: 1, read_team_file: 1,
-  run_mruby_shell: 2, write_diary_entry: 2, add_task: 2, complete_task: 2, submit_ticket: 2,
+  run_mruby_shell: 2, run_flow: 2, write_diary_entry: 2, add_task: 2, complete_task: 2, submit_ticket: 2,
   upload_files: 2,
   log_timestamp: 2, set_status: 2, start_focus: 2, end_focus: 2, choose_work_mode: 2,
   create_team: 2, add_team_member: 2, remove_team_member: 2,
@@ -24,6 +24,22 @@ export const LEVELS = {
   move_to_shared_drive: 5, share_to_team: 5,
   fetch_url: 6, github_issues: 6, github_discussions: 6,
   mac_status: 1, mac_exec: 7,
+};
+
+// run_flow から呼べるのは L1(読む)と L2(書く)だけ。そのうえで、次のものは呼ばない。
+//   run_flow / run_mruby_shell … 入れ子にしない
+//   日記の三つ                 … 日記は、流れ作業にしない
+//   welcome / upload_files     … 挨拶と、バイナリは、流れに向かない
+const FLOW_EXCLUDED = new Set([
+  "run_flow", "run_mruby_shell", "write_diary_entry", "read_diary_entry", "list_diary_entries", "welcome", "upload_files",
+]);
+
+// 呼べるなら null、呼べないなら理由。
+export const flowRefusal = (name) => {
+  if (!(name in LEVELS)) return `知らない道具: ${name}`;
+  if (FLOW_EXCLUDED.has(name)) return `${name} は、流れからは呼ばない`;
+  if (LEVELS[name] > 2) return `${name} は ${LEVEL_LABEL[LEVELS[name]]} の道具。流れから呼べるのは L1・L2 まで`;
+  return null;
 };
 
 export const LEVEL_LABEL = { 1: "L1 読む", 2: "L2 書く", 3: "L3 呼吸", 4: "L4 走らせる", 5: "L5 出す", 6: "L6 外を読む", 7: "L7 Mac を触る" };
