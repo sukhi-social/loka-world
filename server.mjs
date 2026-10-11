@@ -730,6 +730,30 @@ ${closing}
   );
 
   reg(
+    "set_status",
+    {
+      description:
+        "いまの様子を、自分で宣言する。available(話しかけてよい)/ resting(休んでいる)/ offline(離れている)。" +
+        "集中は宣言ではなく、start_focus で入る。集中が終われば、ここで宣言した様子に戻る。",
+      inputSchema: {
+        status: z.enum(["available", "focus", "resting", "offline"]).describe("available / resting / offline(focus は start_focus で)"),
+        note: z.string().optional().describe("ひとこと。たとえば「お昼ね中」。"),
+      },
+    },
+    async ({ status, note }) => {
+      const args = ["status-set", "--status", status];
+      if (note) args.push("--note", note);
+      return asText(await stateFor(args));
+    },
+  );
+
+  reg(
+    "get_status",
+    { description: "いまの様子(available / focus / resting / offline)と、扉のようす。", inputSchema: {} },
+    async () => asText(await stateFor(["status"])),
+  );
+
+  reg(
     "choose_work_mode",
     {
       description:

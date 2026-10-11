@@ -8,6 +8,8 @@
 #   ruby state.rb focus                                  いま集中中か
 #   ruby state.rb focus-start [--task "..."] [--minutes 25]
 #   ruby state.rb focus-end [--summary "..."]
+#   ruby state.rb status                                 いまの様子(集中中なら focus)
+#   ruby state.rb status-set --status available|resting|offline [--note "..."]
 #   ruby state.rb work-mode [--mode continuous|segmented] 付けなければ見るだけ
 #   ruby state.rb task-add --content "..." [--due YYYY-MM-DD]
 #   ruby state.rb task-list
@@ -91,6 +93,36 @@ module State
     rhythm_add("focus_end", task: cur["task"], took_minutes: took, summary: summary)
     { task: cur["task"], started_at: cur["started_at"], ended_at: ended.iso8601, took_minutes: took, summary: summary,
       message: "集中を終えた。#{summary ? "「#{summary}」" : "おつかれ。"}" }
+  end
+
+  # ── ステータス ──────────────────────────────────────────────────────────
+  #
+  # いまの様子を、自分で宣言する。focus だけは宣言ではなく、集中しているあいだ
+  # (focus.json があるあいだ)に、自然にそうなる。扉は、ステータスの見た目にすぎない。
+
+  STATUSES = %w[available focus resting offline].freeze
+  DOORS = {
+    "available" => "扉が開いている",
+    "focus" => "扉が閉まっている",
+    "resting" => "灯りが消えている",
+    "offline" => "灯りが消えている",
+  }.freeze
+
+  def status_file = path("status.json")
+
+  def set_status(status:, note: nil)
+    raise Denied, "status は #{STATUSES.join(" / ")} のどれか" unless STATUSES.include?(status)
+    raise Denied, "集中は、宣言ではなく start_focus で入る。" if status == "focus"
+    write_json(status_file, { "status" => status, "note" => note, "since" => Time.now.iso8601 })
+    rhythm_add("status", status: status, note: note)
+    self.status
+  end
+
+  def status
+    declared = read_json(status_file, nil) || { "status" => "available" }
+    cur = focus
+    view = cur ? { "status" => "focus", "note" => cur["task"], "since" => cur["started_at"] } : declared
+    { status: view["status"], note: view["note"], since: view["since"], door: DOORS[view["status"]] }
   end
 
   # ── ポモドーロ ──────────────────────────────────────────────────────────
@@ -289,6 +321,8 @@ module State
     when "focus" then focus || { focusing: false }
     when "focus-start" then focus_start(task: flag(flags, "task"), minutes: flag(flags, "minutes"))
     when "focus-end" then focus_end(summary: flag(flags, "summary"))
+    when "status" then status
+    when "status-set" then set_status(status: flag(flags, "status"), note: flag(flags, "note"))
     when "pomodoro" then pomodoro || { phase: nil }
     when "pomodoro-start"
       pomodoro_start(task: flag(flags, "task"), work: flag(flags, "work"), rest: flag(flags, "rest"), long_rest: flag(flags, "long-rest"))
