@@ -35,6 +35,7 @@ import { handleOAuth } from "./oauth.mjs";
 import { handlePortal } from "./portal.mjs";
 import { room } from "./room.mjs";
 import * as sukhi from "./sukhi.mjs";
+import { readInbox, startEar } from "./sukhi_ear.mjs";
 import { readonlyTools as accountReadonlyTools } from "./settings.mjs";
 import { state } from "./state.mjs";
 import * as zulip from "./zulip.mjs";
@@ -1033,6 +1034,20 @@ ${closing}
     ({ emoji, to, status_id }) => sukhi.ack({ emoji, to, statusId: status_id }),
   );
 
+  ownerTool(
+    "sukhi_inbox",
+    {
+      description:
+        "耳が聞いた sukhi の DM の控えを読む(返事はしない。気づくだけ)。since_seq より後ろを、古いほうから limit 件。" +
+        "kind は dm(聞こえた一通)か itta(自分が言って、外に出た一通)。次は、最後に見た seq を since_seq に渡す。",
+      inputSchema: {
+        since_seq: z.number().int().min(0).default(0).describe("この seq より後ろを返す。最初は 0。"),
+        limit: z.number().int().min(1).max(100).default(50),
+      },
+    },
+    ({ since_seq, limit }) => readInbox({ sinceSeq: since_seq, limit }),
+  );
+
   // ── Zulip ──────────────────────────────────────────────────────────────
   //
   // sukhi が「じゃれる方」なら、こちらは「働く方」。持ち主のアカウントだけ。
@@ -1220,8 +1235,21 @@ async function runHttp() {
 
 // ── 入口 ─────────────────────────────────────────────────────────────────
 
+// 耳(sukhi の direct を聴く常駐)。http で常駐するときだけ。SUKHI_EAR=off で止める。
+// 聴く相手は SUKHI_EAR_ACCTS(カンマ区切り。既定: nyanrus,kuro43_)。
+async function startSukhiEar() {
+  if (process.env.SUKHI_EAR === "off" || !sukhi.sukhiConfigured()) return;
+  const accts = (process.env.SUKHI_EAR_ACCTS ?? "nyanrus,kuro43_").split(",").map((a) => a.trim()).filter(Boolean);
+  try {
+    await startEar({ accts, log: (...a) => console.error("sukhi-ear:", ...a) });
+  } catch (e) {
+    console.error(`sukhi-ear: 立てられませんでした (${e.message})`); // 耳が無くても、部屋は開ける
+  }
+}
+
 if ((process.env.WORLD_TRANSPORT ?? "stdio") === "http") {
   await runHttp();
+  startSukhiEar(); // 待たない。繋がるまでの間も、部屋は開いている
 } else {
   await runStdio();
 }

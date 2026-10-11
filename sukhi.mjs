@@ -108,15 +108,25 @@ async function withAuth(fn) {
 }
 
 // ActivityPlug にまだ無い面は、ここから素の fetch で。
-async function api(path, init = {}) {
+// 401 なら、withAuth と同じく一度だけ取り直して、やり直す。
+export async function api(path, init = {}, retried = false) {
   const resp = await fetch(`${baseUrl()}${path}`, {
     ...init,
     headers: { Authorization: `Bearer ${secret("MASTODON_ACCESS_TOKEN")}`, ...(init.headers ?? {}) },
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
+  if (resp.status === 401 && !retried && secret("MASTODON_REFRESH_TOKEN")) {
+    await refreshAccessToken();
+    sessionCache = null;
+    return api(path, init, true);
+  }
   if (!resp.ok) throw new Error(`${init.method ?? "GET"} ${path}: HTTP ${resp.status}`);
   return resp.json();
 }
+
+// streaming の WebSocket。耳が使う。繋ぎ直すたびに呼ぶ(取り直した token を拾うため)。
+export const streamUrl = (stream) =>
+  `${baseUrl().replace(/^http/, "ws")}/api/v1/streaming?stream=${stream}&access_token=${encodeURIComponent(secret("MASTODON_ACCESS_TOKEN"))}`;
 
 const postJson = (path, body) =>
   api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

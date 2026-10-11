@@ -52,7 +52,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
-COPY server.mjs paths.mjs ruby.mjs room.mjs state.mjs web.mjs auth.mjs oauth.mjs portal.mjs external.mjs sukhi.mjs sukhi_login.mjs zulip.mjs settings.mjs tools.mjs mac.mjs tool-context.mjs flow.mjs ./
+COPY server.mjs paths.mjs ruby.mjs room.mjs state.mjs web.mjs auth.mjs oauth.mjs portal.mjs external.mjs sukhi.mjs sukhi_ear.mjs sukhi_filter.mjs sukhi_text.mjs sukhi_login.mjs zulip.mjs settings.mjs tools.mjs mac.mjs tool-context.mjs flow.mjs ./
 COPY ruby ./ruby
 COPY skills ./skills
 # 部屋を本当に触る箱(hako)。repo 内の同じパスを local / container で使う。

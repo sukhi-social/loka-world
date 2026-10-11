@@ -26,6 +26,7 @@ export const LEVELS = {
   sukhi_read_home: 6, sukhi_read_mentions: 6, sukhi_read_notifications: 6, sukhi_unread_count: 6,
   sukhi_post: 5, sukhi_reply: 5, sukhi_say: 5, sukhi_ack: 5,
   zulip_read: 6, zulip_say: 5,
+  sukhi_inbox: 1,
   mac_status: 1, mac_exec: 7,
 };
 
