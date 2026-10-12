@@ -19,7 +19,7 @@ import { ownerAccount } from "./auth.mjs";
 import { STATE_DIR } from "./paths.mjs";
 
 // アカウント名をそのまま道にしない。".." などで外へ出ないように。
-const safeName = (account) => String(account).toLowerCase().replace(/[^a-z0-9._-]/g, "_").replace(/^\.+/, "_");
+export const safeName = (account) => String(account).toLowerCase().replace(/[^a-z0-9._-]/g, "_").replace(/^\.+/, "_");
 
 export const voiceDir = (account) => join(STATE_DIR, "voices", safeName(account));
 const voiceFile = (account) => join(voiceDir(account), "voice.json");

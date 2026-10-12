@@ -43,6 +43,7 @@ import { readonlyTools as accountReadonlyTools } from "./settings.mjs";
 import { state } from "./state.mjs";
 import * as zulip from "./zulip.mjs";
 import { withToolContext } from "./tool-context.mjs";
+import { addWatch, listWatches, stopWatch, takeWatch, tickWatches, watchAccounts, watchContext } from "./watch.mjs";
 import { CONFIRM_ALWAYS, flowRefusal, LEVELS, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
 import { originOf, sendJson } from "./web.mjs";
 
@@ -116,6 +117,15 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
   // mruby script は指定範囲を書き換えられるので、破壊的操作として確認する。
   const DESTRUCTIVE = new Set(["run_mruby_shell", "start_job", "mac_exec"]);
 
+  // どの道具の返事にも付く loka_context に、届いている見張りを載せる(Web の AI は、来たときにしか気づけない)。
+  const safeWatchContext = (acct) => {
+    try {
+      return watchContext(acct);
+    } catch {
+      return {};
+    }
+  };
+
   // run_flow が名前で呼べるように、素の handler(結果のあとに context を足す前のもの)を覚えておく。
   const registry = new Map();
 
@@ -144,7 +154,7 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
           ...(config.annotations ?? {}),
         },
       },
-      withToolContext(handler, () => stateFor(["context"])),
+      withToolContext(handler, async () => ({ ...(await stateFor(["context"])), ...safeWatchContext(account) })),
     );
   };
 
@@ -570,6 +580,21 @@ ${closing}
     }
   };
 
+  // 登録した道具を、名前で呼ぶ。run_flow と、loka の時計(見張り)が、同じ口を使う。
+  // 引数は zod で確かめ、道具が失敗を返したら、例外にする。
+  const runTool = async (name, args, extra) => {
+    const tool = registry.get(name);
+    if (!tool) throw new Error(`知らない道具: ${name}`);
+    const parsed = tool.schema.safeParse(args);
+    if (!parsed.success) {
+      throw new Error(parsed.error.issues.map((i) => `${i.path.join(".") || "(args)"}: ${i.message}`).join(" / "));
+    }
+    const result = await tool.handler(parsed.data, extra ?? {});
+    if (result?.isError) throw new Error(textOf(result));
+    return valueOf(result);
+  };
+  server.runTool = (name, args) => runTool(name, args, undefined);
+
   reg(
     "run_flow",
     {
@@ -624,19 +649,67 @@ ${closing}
     },
     async ({ steps }, extra) => {
       validate(steps, flowRefusal);
-      const call = async (name, args) => {
-        const tool = registry.get(name);
-        const parsed = tool.schema.safeParse(args);
-        if (!parsed.success) {
-          throw new Error(parsed.error.issues.map((i) => `${i.path.join(".") || "(args)"}: ${i.message}`).join(" / "));
-        }
-        const result = await tool.handler(parsed.data, extra);
-        if (result?.isError) throw new Error(textOf(result));
-        return valueOf(result);
-      };
+      const call = (name, args) => runTool(name, args, extra);
       // 呼び手が切れたら(extra.signal)待つのをやめる。待てる合計は流れ全体で決まっている。
       return asText(await runFlow(steps, call, { signal: extra?.signal, budgetMs: flowBudgetSeconds() * 1000 }));
     },
+  );
+
+  // ── 見張り(watch)──────────────────────────────────────────────────────
+  //
+  // 待つことを、loka の時計に預ける。run_flow の wait は、ひとつのリクエストのあいだ(90 秒)しか待てない。
+  // Web の AI は loka から呼び出せないので、日単位で待つには、預けるしかない。
+  // 時計が間をおいて読む道具を回し、条件が成り立ったら結果をしまう。AI は、次に来たときの loka_context で気づく。
+
+  reg(
+    "watch_start",
+    {
+      description:
+        "待つことを、loka の時計に預ける(日単位まで)。読む道具を、間をおいて何度も呼び、条件が成り立ったら結果をしまっておく。" +
+        "届いたことは、どの道具の返事にも付く loka_context の watches に出る。受け取るのは watch_take。\n" +
+        "見張れるのは、読むだけの道具(L1 部屋の中は 60 秒以上、L6 外を読むは 300 秒以上の間隔)。書く道具は見張れない。" +
+        "同時に 10 個まで、期限は最長 30 日(既定 7 日)。\n" +
+        "条件(until)は run_flow の when と同じ書きかたで、読んだ結果は w.result。例(sukhi の便りが来たら):\n```json\n" +
+        '{"name":"DM を待つ","tool":"sukhi_inbox","until":{"ref":"w.result.events","nonempty":true},"every":300,"days":7}\n```\n' +
+        "例(休みが開けたら): " +
+        '{"name":"休み明け","tool":"get_pomodoro","until":{"ref":"w.result.phase","eq":"work"},"every":60,"days":1}\n' +
+        "待つ間、何度も覗き直さずにすむ。90 秒で足りるなら、run_flow の wait のほうが軽い。",
+      inputSchema: {
+        name: z.string().min(1).max(80).describe("何を待つかの名前。届いたときに、これが見える。"),
+        tool: z.string().min(1).describe("見に行く道具の名前(L1 か L6 の、読むだけの道具)。"),
+        args: z.record(z.string(), z.unknown()).optional().describe("その道具の引数。"),
+        until: z.record(z.string(), z.unknown()).describe("成り立ったら届ける条件(when と同じ書きかた)。読んだ結果は w.result。"),
+        every: z.number().min(60).max(86400).describe("見に行く間隔の秒数。L1 は 60 以上、L6 は 300 以上。"),
+        days: z.number().min(1).max(30).optional().describe("見張る日数の上限。既定 7、最長 30。"),
+      },
+    },
+    async ({ name, tool, args, until, every, days }) => asText(addWatch(account, { name, tool, args, until, every, days })),
+  );
+
+  reg(
+    "watch_list",
+    {
+      description: "預けた見張りの一覧(見張っている・届いた・期限が来た・止まった)。中身は watch_take で受け取る。",
+      inputSchema: {},
+    },
+    async () => asText({ watches: listWatches(account) }),
+  );
+
+  reg(
+    "watch_take",
+    {
+      description:
+        "届いた見張りを受け取る。条件が成り立ったときの結果を渡して、その見張りは消える。" +
+        "期限が来た・止まったものは、そう伝えて消える。まだ見張っているものは、様子だけ返して消さない。",
+      inputSchema: { id: z.string().min(1).describe("見張りの id(watch_list か loka_context で分かる)。") },
+    },
+    async ({ id }) => asText(takeWatch(account, id)),
+  );
+
+  reg(
+    "watch_stop",
+    { description: "見張りを外す(もう要らないとき)。", inputSchema: { id: z.string().min(1) } },
+    async ({ id }) => asText(stopWatch(account, id)),
   );
 
   reg(
@@ -1606,11 +1679,42 @@ async function runHttp() {
 
 // ── 入口 ─────────────────────────────────────────────────────────────────
 
+// 住人の時計。預かった見張りを、間をおいて回す。http で常駐するときだけ。
+//   WORLD_CLOCK=off で止める。WORLD_CLOCK_SECONDS で目覚める間隔(既定 30、最短 5)。
+// 道具は、その見張りの持ち主として呼ぶ(createServer の account)。一つの呼び出しは 20 秒で切る。
+const clockServers = new Map();
+function startClock() {
+  if (process.env.WORLD_CLOCK === "off") return;
+  const every = Math.max(5, Number(process.env.WORLD_CLOCK_SECONDS) || 30);
+  const run = (account, tool, args) => {
+    if (!clockServers.has(account)) clockServers.set(account, createServer({ account }));
+    let timer;
+    const limit = new Promise((_, reject) => (timer = setTimeout(() => reject(new Error("20 秒たっても返らなかった")), 20_000)));
+    return Promise.race([clockServers.get(account).runTool(tool, args), limit]).finally(() => clearTimeout(timer));
+  };
+  let ticking = false;
+  const tick = async () => {
+    if (ticking) return; // 前の回が終わっていなければ、重ねない
+    ticking = true;
+    try {
+      await tickWatches({ accounts: watchAccounts(), run, log: (...a) => console.error("clock:", ...a) });
+    } catch (e) {
+      console.error(`clock: 転びました (${e.message})`);
+    } finally {
+      ticking = false;
+    }
+  };
+  setTimeout(tick, 5000).unref(); // 起きてすぐ、時が来ているものを回す
+  setInterval(tick, every * 1000).unref();
+  console.error(`clock: ${every} 秒ごとに、見張りを回します`);
+}
+
 // 耳(sukhi の direct を聴く常駐)。声を持っているアカウントごとに一つ。http で常駐するときだけ。
 // SUKHI_EAR=off で止める。聴く相手は、声ごとに(声を繋いだ人。持ち主は SUKHI_EAR_ACCTS)。
 if ((process.env.WORLD_TRANSPORT ?? "stdio") === "http") {
   await runHttp();
   startAllEars(); // 待たない。繋がるまでの間も、部屋は開いている
+  startClock();
 } else {
   await runStdio();
 }

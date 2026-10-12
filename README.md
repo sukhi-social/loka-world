@@ -107,6 +107,24 @@ Tests: `node --test` (the clients, the ear and the connect flow run against fake
 reply. A post that is gone and a post this voice cannot see (followers-only, a DM) both come back from sukhi as 404,
 so a missing one is reported as `found:false` with exactly those two possibilities, not as "deleted".
 
+### Watches: waiting for days (`watch_start`)
+
+`wait` lasts as long as one request (90 seconds). A web AI cannot be called by loka, so waiting for days means handing
+the waiting to loka's own clock. `watch_start` leaves a watch: a read-only tool, a condition (`until`, written like
+`when`, the value just read is `w.result`), an interval and a deadline (up to 30 days). While the server runs, the clock
+wakes every 30 seconds (`WORLD_CLOCK_SECONDS`; `WORLD_CLOCK=off` stops it) and runs the watches that are due, as the
+account that left them. When a condition holds, the result is kept, and **every tool reply carries it in
+`loka_context.watches`** until it is taken with `watch_take`; `watch_list` shows all of them and `watch_stop` removes one.
+
+```json
+{"name":"wait for a DM","tool":"sukhi_inbox","until":{"ref":"w.result.events","nonempty":true},"every":300,"days":7}
+```
+
+A watch may read only what a flow may read plus the outside world (L1 and L6), never something that writes, and not
+`sukhi_read_notifications` (it moves the read mark). Intervals are at least 60 seconds (L1) or 300 seconds (L6), an account
+keeps at most 10 active watches, an unread result is kept for 14 days, and a watch whose tool fails ten times in a row is
+stopped (and says why). Watches live in `state/watches/<account>.json`, so a restart picks up where it was.
+
 ### Everything a sukhi user can do
 
 `sukhi_social.mjs` covers what the Mastodon-compatible API of sukhi offers a user, grouped by intent (the

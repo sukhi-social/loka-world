@@ -29,6 +29,7 @@ export const LEVELS = {
   sukhi_timeline: 6, sukhi_posts_of: 6, sukhi_people: 6, sukhi_relationships: 6, sukhi_thread: 6, sukhi_search: 6, sukhi_collection: 6, sukhi_conversations: 6, sukhi_lists: 6, sukhi_poll: 6,
   sukhi_follow: 5, sukhi_follow_request: 5, sukhi_account_note: 5, sukhi_interact: 5, sukhi_react: 5, sukhi_poll_vote: 5, sukhi_manage_list: 5, sukhi_tidy: 5, sukhi_delete_post: 5, sukhi_moderate: 5, sukhi_report: 5, sukhi_clear_notifications: 5, sukhi_update_profile: 5,
   sukhi_inbox: 1, sukhi_inbox_done: 2,
+  watch_start: 2, watch_list: 1, watch_take: 2, watch_stop: 2,
   mac_status: 1, mac_exec: 7,
 };
 
@@ -47,6 +48,26 @@ export const flowRefusal = (name) => {
   if (LEVELS[name] > 2) return `${name} は ${LEVEL_LABEL[LEVELS[name]]} の道具。流れから呼べるのは L1・L2 まで`;
   return null;
 };
+
+// 見張り(watch)が読める道具。loka の時計が、持ち主に代わって、間をおいて何度も呼ぶ。
+// だから、読むだけの道具(L1 部屋の中・L6 外を読む)に絞る。何かを書く道具を、勝手に繰り返さない。
+//   run_flow / 日記 / welcome / upload_files … 流れと同じ理由で呼ばない
+//   見張りの道具そのもの                       … 見張りが見張りを増やさない
+//   sukhi_read_notifications                   … 読んだところまで既読にする(読むだけではない)
+const WATCH_EXCLUDED = new Set([...FLOW_EXCLUDED, "sukhi_read_notifications"]);
+
+// 呼べるなら null、呼べないなら理由。
+export const watchRefusal = (name) => {
+  if (!(name in LEVELS)) return `知らない道具: ${name}`;
+  if (WATCH_EXCLUDED.has(name) || name.startsWith("watch_")) return `${name} は、見張りからは呼ばない`;
+  if (LEVELS[name] !== 1 && LEVELS[name] !== 6) {
+    return `${name} は ${LEVEL_LABEL[LEVELS[name]]} の道具。見張りが読めるのは L1(部屋の中)と L6(外を読む)だけ`;
+  }
+  return null;
+};
+
+// 見張りの間隔の下限(秒)。外のサーバーを叩く道具は、さらにゆっくり。
+export const watchMinSeconds = (name) => (LEVELS[name] === 6 ? 300 : 60);
 
 export const LEVEL_LABEL = { 1: "L1 読む", 2: "L2 書く", 3: "L3 呼吸", 4: "L4 走らせる", 5: "L5 出す", 6: "L6 外を読む", 7: "L7 Mac を触る" };
 
