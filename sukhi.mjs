@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { createActivityPlugClient, createRemoteAuthority, decodeOpaqueId } from "@activityplug/core";
 import { createMastodonAdapter } from "@activityplug/mastodon";
 
+import { createSocial } from "./sukhi_social.mjs";
 import { loadVoice, saveVoice } from "./voice.mjs";
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -95,6 +96,28 @@ export function showAccount(a) {
     url: a.url,
     avatar: a.avatar,
     header: a.header,
+  };
+}
+
+// Mastodon の status の形から、読むのに要るところだけ(タイムライン・お気に入り・スレッドなど)。
+// ブーストは、元の投稿を見せて、誰がブーストしたかを添える。
+export function showRawStatus(j) {
+  const s = j.reblog ?? j;
+  const mine = ["favourited", "reblogged", "bookmarked", "pinned"].filter((k) => s[k]);
+  return {
+    id: j.id,
+    url: s.url,
+    author: `@${s.account?.acct}`,
+    display_name: s.account?.display_name ?? "",
+    ...(j.reblog ? { boosted_by: `@${j.account?.acct}` } : {}),
+    text: trimHtml(s.content),
+    ...(s.spoiler_text ? { content_warning: s.spoiler_text } : {}),
+    visibility: s.visibility,
+    created_at: s.created_at,
+    ...(s.in_reply_to_id ? { in_reply_to_id: s.in_reply_to_id } : {}),
+    counts: { replies: s.replies_count ?? 0, boosts: s.reblogs_count ?? 0, favourites: s.favourites_count ?? 0 },
+    ...(mine.length ? { by_me: mine } : {}),
+    ...withMedia(showMedia(s.media_attachments)),
   };
 }
 
@@ -451,7 +474,16 @@ export function createSukhi(voice, persist = () => {}) {
     return { ok: true, emoji, status_id: id };
   }
 
-  return { voice, api, streamUrl, readHome, readProfile, readStatus, readMentions, readNotifications, unreadSummary, post, replyTo, say, ack };
+  // 人・投稿・反応・リスト・会話・整理・モデレーション・プロフィール(sukhi_social.mjs)
+  const social = createSocial({
+    api,
+    postJson,
+    base,
+    show: { account: showAccount, status: showRawStatus },
+    ids: { rawStatusId, statusIdFrom },
+  });
+
+  return { voice, social, api, streamUrl, readHome, readProfile, readStatus, readMentions, readNotifications, unreadSummary, post, replyTo, say, ack };
 }
 
 // ── アカウントの声 ────────────────────────────────────────────────────────

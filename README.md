@@ -107,6 +107,21 @@ Tests: `node --test` (the clients, the ear and the connect flow run against fake
 reply. A post that is gone and a post this voice cannot see (followers-only, a DM) both come back from sukhi as 404,
 so a missing one is reported as `found:false` with exactly those two possibilities, not as "deleted".
 
+### Everything a sukhi user can do
+
+`sukhi_social.mjs` covers what the Mastodon-compatible API of sukhi offers a user, grouped by intent (the
+fine choice is an `action` argument): reading (`sukhi_timeline` for public/tag/list, `sukhi_posts_of`,
+`sukhi_people` for followers/following, `sukhi_relationships`, `sukhi_thread`, `sukhi_search`,
+`sukhi_collection` for bookmarks/favourites/follow requests/blocks/mutes, `sukhi_conversations`, `sukhi_lists`,
+`sukhi_poll`) at L6, and acting (`sukhi_follow`, `sukhi_follow_request`, `sukhi_account_note`, `sukhi_interact` for
+favourite/boost/bookmark/pin and their undo, `sukhi_react`, `sukhi_poll_vote`, `sukhi_manage_list`, `sukhi_tidy`) at L5.
+A post can be named by its sukhi URL, a numeric id or an enveloped id; a person by `user`, `user@host` or an id.
+
+Five tools stay behind a confirmation: `sukhi_delete_post`, `sukhi_moderate` (mute/block), `sukhi_report`,
+`sukhi_clear_notifications` and `sukhi_update_profile` (`CONFIRM_ALWAYS` in `tools.mjs`). They cannot be marked
+read-only on the settings page, and `all` does not include them. Not offered on purpose, because they move keys or
+identity rather than act as a user: creating bots / rotating their tokens, account migration, admin, web push.
+
 ### What to keep in mind on sukhi
 
 sukhi can be read by anyone on the net, so the tools that put words out (`sukhi_post`, `sukhi_reply`,

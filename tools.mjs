@@ -26,6 +26,8 @@ export const LEVELS = {
   sukhi_read_home: 6, sukhi_profile: 6, sukhi_status: 6, sukhi_read_mentions: 6, sukhi_read_notifications: 6, sukhi_unread_count: 6,
   sukhi_post: 5, sukhi_reply: 5, sukhi_say: 5, sukhi_ack: 5,
   zulip_read: 6, zulip_say: 5,
+  sukhi_timeline: 6, sukhi_posts_of: 6, sukhi_people: 6, sukhi_relationships: 6, sukhi_thread: 6, sukhi_search: 6, sukhi_collection: 6, sukhi_conversations: 6, sukhi_lists: 6, sukhi_poll: 6,
+  sukhi_follow: 5, sukhi_follow_request: 5, sukhi_account_note: 5, sukhi_interact: 5, sukhi_react: 5, sukhi_poll_vote: 5, sukhi_manage_list: 5, sukhi_tidy: 5, sukhi_delete_post: 5, sukhi_moderate: 5, sukhi_report: 5, sukhi_clear_notifications: 5, sukhi_update_profile: 5,
   sukhi_inbox: 1,
   mac_status: 1, mac_exec: 7,
 };
@@ -53,14 +55,21 @@ export const OPEN_WORLD = new Set([
   "sukhi_read_home", "sukhi_profile", "sukhi_status", "sukhi_read_mentions", "sukhi_read_notifications", "sukhi_unread_count",
   "sukhi_post", "sukhi_reply", "sukhi_say", "sukhi_ack",
   "zulip_read", "zulip_say",
+  "sukhi_timeline", "sukhi_posts_of", "sukhi_people", "sukhi_relationships", "sukhi_thread", "sukhi_search", "sukhi_collection", "sukhi_conversations", "sukhi_lists", "sukhi_poll", "sukhi_follow", "sukhi_follow_request", "sukhi_account_note", "sukhi_interact", "sukhi_react", "sukhi_poll_vote", "sukhi_manage_list", "sukhi_tidy", "sukhi_delete_post", "sukhi_moderate", "sukhi_report", "sukhi_clear_notifications", "sukhi_update_profile",
 ]);
 
 // はじめから読み取り(L1/L6)のものは、切り替えの必要がない。
 export const isReadOnlyByDesign = (name) => (LEVELS[name] ?? 1) === 1 || LEVELS[name] === 6;
 
-// 本人が「読み取り専用と申告する(確認を省く)」を選べる道具。書き込みの段だけ。
+// 消す・取り返しにくい・見える場所の身元を変える道具。確認が出る側のままにする。
+// 設定ページで「読み取り専用と申告」には選べず、all / * を指定しても含まれない。
+export const CONFIRM_ALWAYS = new Set([
+  "sukhi_delete_post", "sukhi_moderate", "sukhi_report", "sukhi_clear_notifications", "sukhi_update_profile",
+]);
+
+// 本人が「読み取り専用と申告する(確認を省く)」を選べる道具。書き込みの段だけ。確認が要る道具は除く。
 export const CHOOSABLE_TOOLS = Object.entries(LEVELS)
-  .filter(([, level]) => level >= 2 && level <= 5)
+  .filter(([name, level]) => level >= 2 && level <= 5 && !CONFIRM_ALWAYS.has(name))
   .map(([name]) => name);
 
 export const toolLabel = (name) => `${LEVEL_LABEL[LEVELS[name] ?? 1]} · ${name}`;

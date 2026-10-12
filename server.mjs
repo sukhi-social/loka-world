@@ -43,7 +43,7 @@ import { readonlyTools as accountReadonlyTools } from "./settings.mjs";
 import { state } from "./state.mjs";
 import * as zulip from "./zulip.mjs";
 import { withToolContext } from "./tool-context.mjs";
-import { flowRefusal, LEVELS, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
+import { CONFIRM_ALWAYS, flowRefusal, LEVELS, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
 import { originOf, sendJson } from "./web.mjs";
 
 const asText = (value) => {
@@ -126,7 +126,7 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
     const readOnly =
       level === 1 ||
       level === 6 ||
-      (level < 7 && (READONLY_TOOLS.has("all") || READONLY_TOOLS.has("*") || READONLY_TOOLS.has(name)));
+      (level < 7 && !CONFIRM_ALWAYS.has(name) && (READONLY_TOOLS.has("all") || READONLY_TOOLS.has("*") || READONLY_TOOLS.has(name)));
     // 結果のあとに共通状態を読むので、集中・TODOを変更する道具も更新後の姿を返す。
     return server.registerTool(
       name,
@@ -137,7 +137,7 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
         annotations: {
           title: `${label} · ${name}`,
           readOnlyHint: readOnly,
-          destructiveHint: !readOnly && DESTRUCTIVE.has(name),
+          destructiveHint: !readOnly && (DESTRUCTIVE.has(name) || CONFIRM_ALWAYS.has(name)),
           idempotentHint: readOnly,
           openWorldHint: OPEN_WORLD.has(name) || level === 7,
           ...(config.annotations ?? {}),
@@ -1089,6 +1089,267 @@ ${closing}
       },
     },
     ({ since_seq, limit }, s) => readInbox({ dir: s.voice.dir, sinceSeq: since_seq, limit }),
+  );
+
+  // ── sukhi のユーザーができること(人・投稿・反応・リスト・会話・整理・モデレーション・プロフィール)──
+  //
+  // 中身は sukhi_social.mjs。意図ごとに一本にまとめてあり、細かい操作は action で選ぶ。
+  // 読む道具は L6、書く道具は L5。消す・取り返しにくいもの(sukhi_delete_post / sukhi_moderate /
+  // sukhi_report / sukhi_clear_notifications / sukhi_update_profile)は CONFIRM_ALWAYS で、確認が出る側のまま。
+  // 投稿は、URL(https://sukhi.f3liz.casa/@誰か/数字)・数字の id・封筒入りの id のどれでも指せる。
+
+  const who = z.string().min(1).max(200).describe("人。user か user@host(別のサーバーの人は sukhi が探す)。数字の id でもよい。");
+  const which = z.string().min(1).max(300).describe("投稿。URL か数字の id(封筒入りの id でもよい)。");
+  const pageLimit = z.number().int().min(1).max(40).default(20);
+  const maxId = z.string().optional().describe("この id より古いぶんを返す(前の返事の next_max_id)。");
+
+  sukhiTool(
+    "sukhi_timeline",
+    {
+      description: "home 以外のタイムラインを読む。kind は public(この sukhi の公開。local:false で連合も)、tag(ハッシュタグ)、list(リスト)。home は sukhi_read_home。",
+      inputSchema: {
+        kind: z.enum(["public", "tag", "list"]),
+        tag: z.string().optional().describe("kind が tag のとき。# は付けても付けなくてもよい。"),
+        list_id: z.string().optional().describe("kind が list のとき。"),
+        local: z.boolean().optional().describe("public では既定 true(この sukhi の中だけ)。false で連合も。"),
+        only_media: z.boolean().optional(),
+        limit: pageLimit,
+        max_id: maxId,
+      },
+    },
+    ({ kind, tag, list_id, local, only_media, limit, max_id }, s) =>
+      s.social.timeline({ kind, tag, listId: list_id, local, onlyMedia: only_media, limit, maxId: max_id }),
+  );
+
+  sukhiTool(
+    "sukhi_posts_of",
+    {
+      description: "その人の投稿を読む(新しい順)。",
+      inputSchema: { who, limit: pageLimit, max_id: maxId, only_media: z.boolean().optional(), exclude_replies: z.boolean().optional() },
+    },
+    ({ who, limit, max_id, only_media, exclude_replies }, s) =>
+      s.social.postsOf({ who, limit, maxId: max_id, onlyMedia: only_media, excludeReplies: exclude_replies }),
+  );
+
+  sukhiTool(
+    "sukhi_people",
+    {
+      description: "その人のフォロワー(followers)か、フォロー中(following)を読む。",
+      inputSchema: { who, relation: z.enum(["followers", "following"]), limit: pageLimit, max_id: maxId },
+    },
+    ({ who, relation, limit, max_id }, s) => s.social.people({ who, relation, limit, maxId: max_id }),
+  );
+
+  sukhiTool(
+    "sukhi_relationships",
+    {
+      description: "その人たちとの関係(フォローしている・されている・リクエスト中・ブロック・ミュート・メモ)を、まとめて見る。",
+      inputSchema: { who: z.array(who).min(1).max(20) },
+    },
+    ({ who }, s) => s.social.relationships({ who }),
+  );
+
+  sukhiTool(
+    "sukhi_thread",
+    {
+      description: "投稿の前後の流れ(返信のもと・返信のあと)を読む。見つからなければ found:false(削除されたか、見えない公開範囲か)。",
+      inputSchema: { which },
+    },
+    ({ which }, s) => s.social.thread({ which }),
+  );
+
+  sukhiTool(
+    "sukhi_search",
+    {
+      description: "sukhi を探す。人・投稿・ハッシュタグ。別のサーバーの人を探したいときは resolve:true。",
+      inputSchema: {
+        q: z.string().min(1).max(300),
+        type: z.enum(["accounts", "statuses", "hashtags"]).optional().describe("省くと、ぜんぶ。"),
+        resolve: z.boolean().optional(),
+        limit: z.number().int().min(1).max(40).default(10),
+      },
+    },
+    ({ q, type, resolve, limit }, s) => s.social.search({ q, type, resolve, limit }),
+  );
+
+  sukhiTool(
+    "sukhi_collection",
+    {
+      description:
+        "自分の入れものを読む。bookmarks(ブックマーク)、favourites(お気に入り)、follow_requests(来ているフォローリクエスト)、blocks(ブロック中の人)、mutes(ミュート中の人)。",
+      inputSchema: { kind: z.enum(["bookmarks", "favourites", "follow_requests", "blocks", "mutes"]), limit: pageLimit, max_id: maxId },
+    },
+    ({ kind, limit, max_id }, s) => s.social.collection({ kind, limit, maxId: max_id }),
+  );
+
+  sukhiTool(
+    "sukhi_conversations",
+    { description: "DM の会話の一覧(相手・未読・最後の一通)。新しい順。", inputSchema: { limit: pageLimit } },
+    ({ limit }, s) => s.social.conversations({ limit }),
+  );
+
+  sukhiTool(
+    "sukhi_lists",
+    {
+      description: "リストを見る。list_id を省くと一覧、渡すとそのリストとメンバー。",
+      inputSchema: { list_id: z.string().optional() },
+    },
+    ({ list_id }, s) => s.social.lists({ listId: list_id }),
+  );
+
+  sukhiTool(
+    "sukhi_poll",
+    { description: "アンケートの集計を見る。", inputSchema: { id: z.string().min(1).describe("アンケートの id。") } },
+    ({ id }, s) => s.social.poll({ id }),
+  );
+
+  sukhiTool(
+    "sukhi_follow",
+    {
+      description: "その人をフォローする(action: follow)か、フォローをやめる(unfollow)。鍵のかかった人は、リクエストになる(requested)。",
+      inputSchema: { who, action: z.enum(["follow", "unfollow"]).default("follow") },
+    },
+    ({ who, action }, s) => s.social.follow({ who, action }),
+  );
+
+  sukhiTool(
+    "sukhi_follow_request",
+    {
+      description: "来ているフォローリクエストを、承認(accept)するか、断る(reject)。来ているものは sukhi_collection の follow_requests。",
+      inputSchema: { who, action: z.enum(["accept", "reject"]) },
+    },
+    ({ who, action }, s) => s.social.followRequest({ who, action }),
+  );
+
+  sukhiTool(
+    "sukhi_account_note",
+    {
+      description: "その人についての、自分だけが見える覚え書きを書く(空にすると消える)。外には出ない。",
+      inputSchema: { who, note: z.string().max(2000) },
+    },
+    ({ who, note }, s) => s.social.accountNote({ who, note }),
+  );
+
+  sukhiTool(
+    "sukhi_interact",
+    {
+      description:
+        "投稿への反応。action は favourite / unfavourite(お気に入り)、boost / unboost(ブースト。見える場所に出る)、" +
+        "bookmark / unbookmark(自分だけ)、pin / unpin(自分の投稿をプロフィールに留める)。絵文字リアクションは sukhi_react。",
+      inputSchema: {
+        which,
+        action: z.enum(["favourite", "unfavourite", "boost", "unboost", "bookmark", "unbookmark", "pin", "unpin"]),
+      },
+    },
+    ({ which, action }, s) => s.social.interact({ which, action }),
+  );
+
+  sukhiTool(
+    "sukhi_react",
+    {
+      description: "投稿に絵文字リアクションを付ける。remove:true で外す。(DM に「読んだよ」を押すのは sukhi_ack が早い。)",
+      inputSchema: { which, emoji: z.string().min(1).max(64), remove: z.boolean().optional() },
+    },
+    ({ which, emoji, remove }, s) => s.social.react({ which, emoji, remove }),
+  );
+
+  sukhiTool(
+    "sukhi_poll_vote",
+    {
+      description: "アンケートに投票する。choices は選択肢の番号(0 から。sukhi_poll の options の index)。",
+      inputSchema: { id: z.string().min(1), choices: z.array(z.number().int().min(0)).min(1).max(20) },
+    },
+    ({ id, choices }, s) => s.social.pollVote({ id, choices }),
+  );
+
+  sukhiTool(
+    "sukhi_manage_list",
+    {
+      description:
+        "リストを作る・直す。action は create(title)、rename(list_id と title)、delete(list_id)、" +
+        "add_members / remove_members(list_id と who)。メンバーに入れられるのは、フォロー中の人だけ(入らなかった人は left_out に出る)。",
+      inputSchema: {
+        action: z.enum(["create", "rename", "delete", "add_members", "remove_members"]),
+        list_id: z.string().optional(),
+        title: z.string().max(200).optional(),
+        who: z.array(who).max(20).optional(),
+      },
+    },
+    ({ action, list_id, title, who }, s) => s.social.manageList({ action, listId: list_id, title, who }),
+  );
+
+  sukhiTool(
+    "sukhi_tidy",
+    {
+      description: "整える。dismiss_notification(通知をひとつ消す。id は通知の id)、read_conversation(DM の会話を既読にする。id は会話の id)。",
+      inputSchema: { action: z.enum(["dismiss_notification", "read_conversation"]), id: z.string().min(1) },
+    },
+    ({ action, id }, s) => s.social.tidy({ action, id }),
+  );
+
+  // ── 確認が出る側のままの道具 ──
+
+  sukhiTool(
+    "sukhi_delete_post",
+    {
+      description: "**この声の投稿を消す。取り返しがつかない。** 消す前に、消していい投稿か、sukhi_status で確かめる。",
+      inputSchema: { which },
+    },
+    ({ which }, s) => s.social.deletePost({ which }),
+  );
+
+  sukhiTool(
+    "sukhi_moderate",
+    {
+      description:
+        "**その人を、ミュート(mute / unmute)かブロック(block / unblock)する。** ブロックは、相手からこちらが見えなくなる。" +
+        "mute では notifications:true で、その人の通知も止める。",
+      inputSchema: {
+        who,
+        action: z.enum(["mute", "unmute", "block", "unblock"]),
+        notifications: z.boolean().optional().describe("mute のとき、通知も止めるか。"),
+      },
+    },
+    ({ who, action, notifications }, s) => s.social.moderate({ who, action, notifications }),
+  );
+
+  sukhiTool(
+    "sukhi_report",
+    {
+      description:
+        "**その人(と、問題の投稿)を、サーバーの管理者に通報する。** 取り消せない。comment に理由を書く。category は spam / violation / legal / other など。",
+      inputSchema: {
+        who,
+        which: z.array(which).max(20).optional().describe("問題の投稿(省いてもよい)。"),
+        comment: z.string().min(1).max(1000),
+        category: z.string().max(40).optional(),
+      },
+    },
+    ({ who, which, comment, category }, s) => s.social.report({ who, which, comment, category }),
+  );
+
+  sukhiTool(
+    "sukhi_clear_notifications",
+    { description: "**通知を、ぜんぶ消す。取り返しがつかない。** 一つずつなら sukhi_tidy の dismiss_notification。", inputSchema: {} },
+    (_args, s) => s.social.clearNotifications(),
+  );
+
+  sukhiTool(
+    "sukhi_update_profile",
+    {
+      description:
+        "**この声のプロフィールを変える**(表示名・自己紹介・ボットかどうか・フォローを承認制にするか・項目)。見える場所に出る。" +
+        "渡したところだけ変わる。",
+      inputSchema: {
+        display_name: z.string().max(100).optional(),
+        note: z.string().max(500).optional().describe("自己紹介。"),
+        bot: z.boolean().optional(),
+        locked: z.boolean().optional().describe("true で、フォローを承認制にする。"),
+        fields: z.array(z.object({ name: z.string().max(100), value: z.string().max(200) })).max(4).optional(),
+      },
+    },
+    ({ display_name, note, bot, locked, fields }, s) =>
+      s.social.updateProfile({ displayName: display_name, note, bot, locked, fields }),
   );
 
   // ── Zulip ──────────────────────────────────────────────────────────────
