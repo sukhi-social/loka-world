@@ -37,7 +37,7 @@ import { handleVoiceHttp } from "./voice_http.mjs";
 import { room } from "./room.mjs";
 import { sukhiFor } from "./sukhi.mjs";
 import { withManners } from "./sukhi_manners.mjs";
-import { readInbox } from "./sukhi_ear.mjs";
+import { commitInbox, readInbox } from "./sukhi_ear.mjs";
 import { startAllEars } from "./sukhi_ears.mjs";
 import { readonlyTools as accountReadonlyTools } from "./settings.mjs";
 import { state } from "./state.mjs";
@@ -88,6 +88,7 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
         "shared_drive/ は本人が渡すと決めたものだけ。正本を複数の場所に置いて重ねて更新しない。" +
         "すべての道具の返答には、その時点の時刻・集中状態・未完了タスク(loka_context)が含まれる。" +
         "作ったものは消えずに残る。新しく繋いだら、まず welcome の机の見取り図から続きを探す。" +
+        "何かを待つとき(sukhi の便り・ポモドーロの休み明け・ジョブの結果)は、何度も覗かず、run_flow の wait で待つ。" +
         "完成したら achievements へ、人に見せてよければ move_to_shared_drive で共有へ。日記と集中の記録は、作業を健やかに続けるためのもの。" +
         "Web AI からの feedback は submit_ticket で desk/inbox/tickets/ に非公開で届く。GitHub へは自動公開しない。" +
         "接続したら、まず welcome を呼ぶこと。ついで、あなたのユーザーに「loka を使いますか?」と尋ね、返事を待つこと。" +
@@ -244,7 +245,8 @@ shared_drive/ は人に渡すと決めたものだけにして、正本を別の
   手を動かす run_mruby_shell(机・書庫・成果・共有) / upload_files(バイナリ)
   裏で走らせる start_job / job_status / stop_job(desk/<project> の中で、本物のシェル。結果はすこし遅れて見える ──
               覗きに来るより、if で先を読んだ script にしておく)
-  流れ       run_flow(道具を順に呼ぶ。結果を渡せて、失敗や条件で道筋を分けられる。L1・L2 まで)
+  流れ       run_flow(道具を順に呼ぶ。結果を渡せて、失敗や条件で道筋を分けられる。L1・L2 まで。
+              待つなら wait ── sukhi の便り・ポモドーロの休み明け・ジョブの結果を、覗き込まずに待てる)
   ポモドーロ pomodoro_start / get_pomodoro / pomodoro_stop(働く25分・休む5分。休むのはシロ自身。休む間は start_job が断られる)
   共有       move_to_shared_drive
   チーム     create_team / list_teams / add_team_member / share_to_team / list_team_files / read_team_file
@@ -551,6 +553,13 @@ ${closing}
   // 道具の名前と引数を並べて、上から順に動かす。手順の結果は、あとの手順から使える。
   // 呼べるのは L1・L2 の道具だけ(tools.mjs の flowRefusal)。段は混ぜない。
 
+  // 能動的に待てる合計。loka.f3liz.casa は Cloudflare の向こうで、返事が 100 秒ないと 524 で切られる。
+  // 長く待ちたいときは、呼ぶ側が間をおいて、もう一度呼ぶ。
+  const flowBudgetSeconds = () => {
+    const n = Number(process.env.WORLD_FLOW_MAX_SECONDS ?? 90);
+    return Number.isFinite(n) && n >= 1 ? n : 90;
+  };
+
   const textOf = (r) => (r?.content ?? []).map((c) => c?.text ?? "").join("\n");
   const valueOf = (r) => {
     const text = textOf(r);
@@ -571,16 +580,39 @@ ${closing}
         "  id … 手順の名前。あとから ${id.result.xxx}(結果)/ ${id.ok}(成功したか)/ ${id.error}(失敗の理由)で使う。省くと s1, s2 …。\n" +
         "  when … 合わなければ、その手順は飛ばす。{ ref: \"a.ok\" } / { ref: \"a.result.n\", gt: 3 }(eq ne gt lt contains exists)/ { all: [...] } { any: [...] } { not: {...} }。\n" +
         "  on_error … \"stop\"(既定。失敗したらそこで止まる)か \"continue\"(失敗を記録して先へ。次の when で受ける)。\n" +
+        "  wait … tool の代わりに書く。条件が整うまで、能動的に待つ(cron などで、来るのを待ってから動くとき)。\n" +
+        "    { seconds: 20 } ただ待つ / { tool, args?, until, every?: 5, every_ref?, timeout?: 30, on_timeout?: \"continue\"|\"stop\" }\n" +
+        "    every_ref は、道具が次に来てほしい秒数を教えてくれるとき(job_status の next_check_in)に、それに従う印。のぞきこまず、道具のペースで待てる。\n" +
+        "    every 秒ごとに tool(L1・L2 の道具)を呼び、until(when と同じ書きかた。いま引いた結果は ${id.result})が成り立つまで繰り返す。\n" +
+        "    時間切れは失敗ではなく status が timed_out になり、${id.wait.satisfied} が false。続きの手順を when で分ける(止めたいなら on_timeout: \"stop\")。\n" +
+        `    待てる合計は、流れ全体で ${flowBudgetSeconds()} 秒まで(それ以上は、呼ぶ側が間をおいて、もう一度呼ぶ)。\n` +
+        "    条件には { ref: \"w.result.events\", nonempty: true }(空でない)も使える。\n" +
         "例(読んで、無ければ足す):\n```json\n" +
         '[{"id":"t","tool":"list_tasks"},\n' +
         ' {"tool":"add_task","args":{"content":"続きを書く"},"when":{"ref":"t.result.tasks","eq":[]}}]\n```\n' +
+        "例(sukhi の DM が来るのを最大 60 秒待って、来ていたら続ける):\n```json\n" +
+        '[{"id":"w","wait":{"tool":"sukhi_inbox","until":{"ref":"w.result.events","nonempty":true},"every":5,"timeout":60}},\n' +
+        ' {"tool":"add_task","args":{"content":"DM に返事"},"when":{"ref":"w.wait.satisfied"}}]\n```\n' +
         "戻すことはしない。止まったら、そこまでの結果と理由を返す。",
       inputSchema: {
         steps: z
           .array(
             z.object({
               id: z.string().max(40).optional().describe("手順の名前(英数字と _)。"),
-              tool: z.string().describe("呼ぶ道具の名前。"),
+              tool: z.string().optional().describe("呼ぶ道具の名前。wait を書くときは省く。"),
+              wait: z
+                .object({
+                  seconds: z.number().positive().max(3600).optional().describe("ただ待つ秒数(tool を書かないとき)。"),
+                  tool: z.string().optional().describe("繰り返し呼ぶ道具(L1・L2)。"),
+                  args: z.record(z.string(), z.unknown()).optional().describe("その道具の引数。"),
+                  until: z.record(z.string(), z.unknown()).optional().describe("成り立ったら待つのをやめる条件(when と同じ書きかた)。"),
+                  every: z.number().min(1).max(300).optional().describe("呼ぶ間隔の秒数。既定 5。"),
+                  every_ref: z.string().max(100).optional().describe("道具が「次は何秒あとに」と教えてくれる値の参照(例: w.result.next_check_in)。あれば every より長いほうに従う。"),
+                  timeout: z.number().min(1).max(3600).optional().describe("待つ秒数の上限。既定 30。流れ全体の持ち時間も越えない。"),
+                  on_timeout: z.enum(["continue", "stop"]).optional().describe("時間切れのとき。既定は continue(先へ進む)。"),
+                })
+                .optional()
+                .describe("条件が整うまで待つ。tool の代わりに書く。"),
               args: z.record(z.string(), z.unknown()).optional().describe("道具の引数。文字列の ${...} で前の結果を使える。"),
               when: z.record(z.string(), z.unknown()).optional().describe("条件。合わなければ飛ばす。"),
               on_error: z.enum(["stop", "continue"]).optional().describe("失敗したとき。既定は stop。"),
@@ -602,7 +634,8 @@ ${closing}
         if (result?.isError) throw new Error(textOf(result));
         return valueOf(result);
       };
-      return asText(await runFlow(steps, call));
+      // 呼び手が切れたら(extra.signal)待つのをやめる。待てる合計は流れ全体で決まっている。
+      return asText(await runFlow(steps, call, { signal: extra?.signal, budgetMs: flowBudgetSeconds() * 1000 }));
     },
   );
 
@@ -619,6 +652,7 @@ ${closing}
         "if / && / || で分岐し、成功も失敗も、次の手まで一つの script に入れておく。例:\n```sh\n" +
         "if npm test > test.log 2>&1; then echo PASS > .result; npm run build > build.log 2>&1 && echo BUILT >> .result;\n" +
         "else echo FAIL > .result; tail -40 test.log >> .result; fi\n```\n" +
+        "結果を待つのは、覗き直さずに run_flow の wait で(job_status の説明に例がある)。\n" +
         "ポモドーロの『休む時間』は、シロ自身の休み。そのあいだは、新しく始めない(走っているものは続く)。",
       inputSchema: {
         cmd: z.string().min(1).max(16 * 1024).describe("sh -c で走らせる命令。複数行の script でよい。"),
@@ -649,7 +683,9 @@ ${closing}
       description:
         "ジョブの状態と出力を読む。id を省くと、最近のジョブの一覧。" +
         "走っている間と、終わった直後は、中身が見えない(state が running / settling で、next_check_in 秒あとに来る)。" +
-        "すぐ何度も覗かず、その間に次の手を if で書いておく。since に前回の next_offset を渡すと、つづきだけ返る。",
+        "すぐ何度も覗かず、その間に次の手を if で書いておく。since に前回の next_offset を渡すと、つづきだけ返る。\n" +
+        "結果を待つなら、覗き直さずに run_flow の wait で、道具が教える間隔(next_check_in)に従って待てる: " +
+        '{"id":"w","wait":{"tool":"job_status","args":{"id":"<ジョブの id>"},"until":{"ref":"w.result.next_check_in","exists":false},"every_ref":"w.result.next_check_in","every":10,"timeout":80}}。',
       inputSchema: {
         id: z.string().optional().describe("ジョブの id。省くと一覧。"),
         since: z.number().int().min(0).optional().describe("この位置(バイト)から先の出力だけ。"),
@@ -695,7 +731,13 @@ ${closing}
 
   reg(
     "get_pomodoro",
-    { description: "いまのポモドーロの区切り(働く / 休む)と、残りの分。", inputSchema: {} },
+    {
+      description:
+        "いまのポモドーロの区切り(働く / 休む)と、残りの分。" +
+        "休みが開けるのを待つなら、覗き直さずに run_flow の wait で: " +
+        '{"id":"w","wait":{"tool":"get_pomodoro","until":{"ref":"w.result.phase","eq":"work"},"every":20,"timeout":80}}。',
+      inputSchema: {},
+    },
     async () => asText((await stateFor(["pomodoro"])) ?? { phase: null }),
   );
 
@@ -1080,15 +1122,31 @@ ${closing}
     "sukhi_inbox",
     {
       description:
-        "耳が聞いた sukhi の DM の控えを読む(返事はしない。気づくだけ)。since_seq より後ろを、古いほうから limit 件。" +
+        "耳が聞いた sukhi の控えを読む(返事はしない。気づくだけ)。古いほうから limit 件。" +
+        "**since_seq を省くと、前回の続き(sukhi_inbox_done で進めた位置)から**読む ── 定期の cron は、これで同じものを読み直さない。" +
         "kind は dm(DM で聞こえた一通。返事は sukhi_say)、mention(名前を呼ばれた投稿。公開範囲は visibility。返事は sukhi_reply に status_id を渡す)、" +
-        "itta(自分が言って、外に出た一通)。次は、最後に見た seq を since_seq に渡す。",
+        "notification(フォロー・お気に入り・ブースト・よその人の mention など、あったことだけ。種類は type、誰からかは acct。本文は入らない)、" +
+        "itta(自分が言って、外に出た一通)。\n" +
+        "来るのを待つなら、のぞきこまずに run_flow の wait で: " +
+        "{\"id\":\"w\",\"wait\":{\"tool\":\"sukhi_inbox\",\"until\":{\"ref\":\"w.result.events\",\"nonempty\":true},\"every\":5,\"timeout\":60}}。" +
+        "読んで返事をし終えたら、sukhi_inbox_done で位置を進める(読んだだけでは進まない。落ちても、同じものがもう一度届く)。",
       inputSchema: {
-        since_seq: z.number().int().min(0).default(0).describe("この seq より後ろを返す。最初は 0。"),
+        since_seq: z.number().int().min(0).optional().describe("この seq より後ろを返す。省くと、前回の続きから。"),
         limit: z.number().int().min(1).max(100).default(50),
       },
     },
     ({ since_seq, limit }, s) => readInbox({ dir: s.voice.dir, sinceSeq: since_seq, limit }),
+  );
+
+  sukhiTool(
+    "sukhi_inbox_done",
+    {
+      description:
+        "控えを、seq まで『済んだ』にする。次の sukhi_inbox(since_seq を省いたとき)は、その続きから読む。" +
+        "**返事をし終えてから**呼ぶ。戻らず、まだ来ていない先へも進まない。",
+      inputSchema: { seq: z.number().int().min(0).describe("済んだところの seq(sukhi_inbox が返した最後の seq)。") },
+    },
+    ({ seq }, s) => commitInbox({ dir: s.voice.dir, seq }),
   );
 
   // ── sukhi のユーザーができること(人・投稿・反応・リスト・会話・整理・モデレーション・プロフィール)──

@@ -16,6 +16,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeF
 import { dirname, join } from "node:path";
 
 import { conversationIsWith, decide, decideMention, decideStatus } from "./sukhi_filter.mjs";
+
+const trimSlash = (uri) => (typeof uri === "string" ? uri.replace(/\/+$/, "") : null);
 import { heardFrom } from "./sukhi_text.mjs";
 
 const SEEN_MAX = 500;
@@ -92,8 +94,12 @@ export function fileStore(dir) {
     // どこまで見たか。DM(direct の流れ)と mention(通知)は、別々の印を持つ。
     lastSeen: () => readJson(earFile, {}).lastSeen ?? null,
     saveLastSeen: (lastSeen) => writeJson(earFile, { ...readJson(earFile, {}), lastSeen }),
-    lastSeenMention: () => readJson(earFile, {}).lastSeenMention ?? null,
-    saveLastSeenMention: (lastSeenMention) => writeJson(earFile, { ...readJson(earFile, {}), lastSeenMention }),
+    // 通知ぜんぶの印。古い版の印(lastSeenMention)があれば、そこから引き継ぐ。
+    lastSeenNotif: () => {
+      const f = readJson(earFile, {});
+      return f.lastSeenNotif ?? f.lastSeenMention ?? null;
+    },
+    saveLastSeenNotif: (lastSeenNotif) => writeJson(earFile, { ...readJson(earFile, {}), lastSeenNotif }),
 
     append(event) {
       const row = { seq: ++seq, at: new Date().toISOString(), ...event };
@@ -113,9 +119,24 @@ export function fileStore(dir) {
 }
 
 // 控えを読む。since より後ろの、古いほうから limit 件。
-export function readInbox({ dir, sinceSeq = 0, limit = 50 }) {
-  const rows = readLines(join(dir, "sukhi_inbox.jsonl")).filter((e) => e.seq > sinceSeq);
-  return { events: rows.slice(0, limit), has_more: rows.length > limit };
+// since を省くと、保存した位置(sukhi_inbox_done で進めたところ)から ── 定期の cron が、前回の続きから読めるように。
+export function readInbox({ dir, sinceSeq, limit = 50 }) {
+  const since = sinceSeq ?? inboxCursor({ dir });
+  const rows = readLines(join(dir, "sukhi_inbox.jsonl")).filter((e) => e.seq > since);
+  return { since_seq: since, cursor: inboxCursor({ dir }), events: rows.slice(0, limit), has_more: rows.length > limit };
+}
+
+// 「ここまで済んだ」の位置。読んだだけでは進めない ── 返事をし終えてから進める。
+// 途中で落ちたら、次に同じものがもう一度届く(取りこぼさない側に倒してある)。
+const cursorFile = (dir) => join(dir, "sukhi_inbox_cursor.json");
+export const inboxCursor = ({ dir }) => Number(readJson(cursorFile(dir), {}).seq) || 0;
+
+/** 位置を seq まで進める。戻さない。控えにある最後の seq より先へは進めない(まだ来ていないものを飛ばさない)。 */
+export function commitInbox({ dir, seq }) {
+  const latest = readLines(join(dir, "sukhi_inbox.jsonl")).at(-1)?.seq ?? 0;
+  const next = Math.max(inboxCursor({ dir }), Math.min(Number(seq) || 0, latest));
+  writeJson(cursorFile(dir), { seq: next });
+  return { cursor: next, latest };
 }
 
 // ── 芯 ───────────────────────────────────────────────────────────────────
@@ -141,12 +162,12 @@ export function createEar({ api, watched, me, store, log = () => {} }) {
     store.saveLastSeen(lastSeen);
   };
 
-  // mention 通知の印。通知の id で数える(status の id とは別の並び)。
-  let lastSeenMention = store.lastSeenMention();
-  const markSeenMention = (id) => {
-    if (!id || !newer(id, lastSeenMention)) return;
-    lastSeenMention = id;
-    store.saveLastSeenMention(lastSeenMention);
+  // 通知の印。通知の id で数える(status の id とは別の並び)。
+  let lastSeenNotif = store.lastSeenNotif();
+  const markSeenNotif = (id) => {
+    if (!id || !newer(id, lastSeenNotif)) return;
+    lastSeenNotif = id;
+    store.saveLastSeenNotif(lastSeenNotif);
   };
 
   const seen = new Set();
@@ -232,52 +253,74 @@ export function createEar({ api, watched, me, store, log = () => {} }) {
     markSeen(d.statusId);
   }
 
-  // 名前を呼ばれた(mention 通知)。DM は direct の流れのほうが決めるので、ここでは通らない。
-  function handleNotification(payload) {
-    const d = decideMention(payload, uris);
-    if (!d.ok) return;
-    markSeenMention(d.notificationId);
-    if (!remember(d.statusId)) return;
-    heard(d, null, { kind: "mention" });
+  // 通知がひとつ来た。誰が書いたかで、扱いが分かれる:
+  //   聴く相手の mention(公開・未収載・フォロワー限定) … 本文つきの mention として控える
+  //   聴く相手の direct の mention                       … DM の道(direct の流れ・会話の一覧)が決めるので、ここでは何もしない
+  //   それ以外(よその人の mention、フォロー・お気に入り・ブースト…) … あったことだけ(種類・誰から・どの投稿か)。本文と表示名は控えない
+  //     ── 知らない人の言葉を、そのまま読ませないため。
+  const seenNotif = new Set();
+  function processNotification(n, extra = {}) {
+    if (!n || typeof n !== "object") return;
+    const d = decideMention(n, uris);
+    if (d.ok) {
+      if (remember(d.statusId)) heard(d, null, { kind: "mention", ...extra });
+      return;
+    }
+    if (n.type === "mention" && n.status?.visibility === "direct" && uris.includes(trimSlash(n.status?.account?.uri))) return;
+    if (typeof n.id === "string") {
+      if (seenNotif.has(n.id)) return;
+      seenNotif.add(n.id);
+      if (seenNotif.size > SEEN_MAX) seenNotif.delete(seenNotif.values().next().value);
+    }
+    store.append({
+      kind: "notification",
+      type: String(n.type ?? "unknown").slice(0, 40),
+      acct: typeof n.account?.acct === "string" ? n.account.acct : null,
+      ...(n.status?.id ? { status_id: n.status.id } : {}),
+      ...(n.status?.url ? { url: n.status.url } : {}),
+      ...extra,
+    });
   }
 
-  // 拾い直しの最中に来たフレームは、DM も mention も、ぜんぶ脇に置く(終わってから処理する)。
+  function handleNotification(payload) {
+    markSeenNotif(payload?.id);
+    processNotification(payload);
+  }
+
+  // 拾い直しの最中に来たフレームは、DM も 通知も、ぜんぶ脇に置く(終わってから処理する)。
   async function catchUp() {
     if (catchingUp) return; // 走っているあいだに、もう一度呼ばれても重ねない
     catchingUp = true;
     try {
       await catchUpInner();
-      await catchUpMentions();
+      await catchUpNotifications();
     } finally {
       catchingUp = false;
       for (const raw of queued.splice(0)) handleFrame(raw);
     }
   }
 
-  async function catchUpMentions() {
+  async function catchUpNotifications() {
     let list;
     try {
-      list = await api("/api/v1/notifications?types[]=mention&limit=40");
+      list = await api("/api/v1/notifications?limit=40");
     } catch (e) {
-      log(`mention の留守のぶんを見にいけなかった: ${e.message}`);
+      log(`通知の留守のぶんを見にいけなかった: ${e.message}`);
       return;
     }
     if (!Array.isArray(list)) return;
 
     // はじめての起動なら、過去を蒸し返さず、いまの位置から聴く。
-    if (lastSeenMention === null) {
-      for (const n of list) markSeenMention(n.id);
-      log(`mention も、いまの位置(${lastSeenMention ?? "なし"})から聴きます。`);
+    if (lastSeenNotif === null) {
+      for (const n of list) markSeenNotif(n.id);
+      log(`通知も、いまの位置(${lastSeenNotif ?? "なし"})から聴きます。`);
       return;
     }
 
-    const pending = list
-      .filter((n) => newer(n.id, lastSeenMention))
-      .map((n) => ({ n, d: decideMention(n, uris) }))
-      .sort((x, y) => (newer(x.n.id, y.n.id) ? 1 : -1)); // 古いほうから
-    for (const { n, d } of pending) {
-      markSeenMention(n.id); // 通らなかった通知も、印は進める(読んだ、という意味で)
-      if (d.ok && remember(d.statusId)) heard(d, null, { kind: "mention", late: true });
+    const pending = list.filter((n) => newer(n.id, lastSeenNotif)).sort((x, y) => (newer(x.id, y.id) ? 1 : -1)); // 古いほうから
+    for (const n of pending) {
+      markSeenNotif(n.id); // 通らなかった通知も、印は進める(読んだ、という意味で)
+      processNotification(n, { late: true });
     }
   }
 

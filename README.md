@@ -186,6 +186,31 @@ branch on a failure. Only L1 and L2 tools can be called; `run_flow`, `run_mruby_
 tools, `welcome`, and `upload_files` cannot. Nothing is rolled back: a stopped flow returns what ran
 and why it stopped. The logic lives in `flow.mjs` (`node --test flow.test.mjs`).
 
+
+### Waiting (`wait`)
+
+A step can wait, actively, for something to be true instead of the caller peeking again and again:
+
+```json
+[{"id":"w","wait":{"tool":"sukhi_inbox","until":{"ref":"w.result.events","nonempty":true},"every":5,"timeout":60}},
+ {"id":"next","tool":"add_task","args":{"content":"reply to the DM"},"when":{"ref":"w.wait.satisfied"}}]
+```
+
+`wait` polls a tool (L1/L2, like every flow step) every `every` seconds until `until` holds; `until` is written like
+`when`, and the value just read is `${id.result}`. Running out of time is not a failure: the step ends as
+`timed_out` with `${id.wait.satisfied}` false, so later steps branch with `when` (use `on_timeout: "stop"` to stop
+instead). `{ "wait": { "seconds": 20 } }` just waits. `every_ref` lets a tool set the pace: `job_status` says
+when to come back (`next_check_in`), and `every_ref: "w.result.next_check_in"` follows it. The total a flow may wait
+is capped by `WORLD_FLOW_MAX_SECONDS` (default 90, because the site sits behind a proxy that cuts a silent
+response at 100 seconds); a longer wait is a caller that comes back after a pause. A caller that disconnects ends
+the wait.
+
+Things worth waiting for: sukhi's inbox (DMs, mentions, and notifications such as follows or favourites: `kind`
+`notification` keeps only the type and who, never the text), the pomodoro opening
+(`get_pomodoro`, `phase` becomes `work`), and a job's result (`job_status`). `sukhi_inbox` without `since_seq` reads
+from where `sukhi_inbox_done` last moved to, so a cron that runs every hour does not read the same messages again;
+call `sukhi_inbox_done` after replying, not after reading.
+
 ## Pomodoro
 
 `pomodoro_start` begins 25-minute work / 5-minute rest rounds (the 4th rest is 15 minutes). There is
