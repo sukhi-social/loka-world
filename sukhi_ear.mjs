@@ -22,6 +22,13 @@ const SEEN_MAX = 500;
 const INBOX_KEEP = 1000;
 const BACKOFF_MAX_MS = 30_000;
 
+// 別のサーバーから来た DM は、sukhi が direct の流れにも通知にも載せない(保存するだけ)。
+// 会話の一覧には出るので、定期的に拾い直して聞く。0 で、定期はやめる(繋ぎなおしのときだけ)。
+const pollSeconds = () => {
+  const n = Number(process.env.SUKHI_EAR_POLL_SECONDS ?? 30);
+  return Number.isFinite(n) && n >= 0 ? n : 30;
+};
+
 // snowflake は数字の文字列。数として比べる。
 function newer(a, b) {
   if (b === null || b === undefined) return true;
@@ -236,6 +243,7 @@ export function createEar({ api, watched, me, store, log = () => {} }) {
 
   // 拾い直しの最中に来たフレームは、DM も mention も、ぜんぶ脇に置く(終わってから処理する)。
   async function catchUp() {
+    if (catchingUp) return; // 走っているあいだに、もう一度呼ばれても重ねない
     catchingUp = true;
     try {
       await catchUpInner();
@@ -390,10 +398,15 @@ export async function startEar({ sukhi, accts, dir, log = console.error }) {
   };
   connect();
 
+  // 流れが切れているあいだも、流れに載らない DM があるので、流れとは別に回す。
+  const every = pollSeconds();
+  const poll = every > 0 ? setInterval(() => ear.catchUp().catch((e) => log(`拾い直しで転んだ: ${e.message}`)), every * 1000) : null;
+
   return {
     stop() {
       stopping = true;
       clearTimeout(timer);
+      if (poll) clearInterval(poll);
       ws?.close();
     },
   };

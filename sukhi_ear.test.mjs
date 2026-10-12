@@ -198,6 +198,41 @@ test("拾い直しの最中に来た通知は、終わってから処理され�
   assert.deepEqual(inbox().map((e) => e.status_id).sort(), ["p1", "p2", "p5"]);
 });
 
+test("別のサーバーから来た DM は、流れに載らなくても、会話の一覧を見れば拾える(定期の拾い直し)", async () => {
+  // 一度目: 印をつけるだけ。そのあとに届いた DM が、二度目の拾い直しで拾われる。
+  let convs = [conv("c0", REMOTE, status("100", REMOTE, "<p>前</p>"))];
+  const api = async (path) => (path === "/api/v1/conversations" ? convs : path.endsWith("/context") ? { ancestors: [] } : []);
+  const { ear, inbox } = setupRemote({ api });
+  await ear.catchUp();
+  assert.deepEqual(inbox(), []);
+
+  convs = [conv("c1", REMOTE, status("200", REMOTE, "<p>@shiro DM だよ</p>")), ...convs];
+  await ear.catchUp();
+  assert.deepEqual(inbox().map((e) => [e.kind, e.acct, e.text, e.late]), [["dm", "kuro43_@misskey.io", "DM だよ", true]]);
+
+  await ear.catchUp(); // 三度目は、もう何も増えない
+  assert.equal(inbox().length, 1);
+});
+
+test("拾い直しが走っているあいだに呼ばれても、重ならない", async () => {
+  let calls = 0;
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const api = async (path) => {
+    if (path === "/api/v1/conversations") {
+      calls++;
+      await gate;
+    }
+    return [];
+  };
+  const { ear } = setupRemote({ api, lastSeen: "1", lastSeenMention: "1" });
+  const first = ear.catchUp();
+  await ear.catchUp(); // すぐ戻る
+  release();
+  await first;
+  assert.equal(calls, 1);
+});
+
 test("相手を引くとき resolve を付ける。引けない相手は黙って外す", async () => {
   const asked = [];
   const api = async (path) => {

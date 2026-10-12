@@ -71,6 +71,7 @@ voice is connected on the settings page:
 | `MASTODON_CLIENT_ID`, `MASTODON_CLIENT_SECRET`, `MASTODON_REFRESH_TOKEN`, `MASTODON_SCOPE` | Optional. On a 401 the token is refreshed and kept in the voice file. |
 | `SUKHI_EAR_ACCTS` | Whose DMs the owner's ear listens to. Default `nyanrus,kuro43_`. (A connected voice listens to the person who connected it.) |
 | `SUKHI_EAR=off` | No ears at all. |
+| `SUKHI_EAR_POLL_SECONDS` | How often the ear looks at the conversation list (default 30; `0` = only when the stream reconnects). |
 | `SUKHI_VOICE_CLIENT_ID`, `SUKHI_VOICE_CLIENT_SECRET`, `SUKHI_VOICE_REDIRECT_URI` | Use a fixed sukhi app for voices instead of registering one. |
 | `ZULIP_SITE`, `ZULIP_EMAIL`, `ZULIP_API_KEY` | Zulip (the same three values as `.zuliprc`). Owner account only for now: Zulip has no OAuth, so a per-account key needs a form. |
 
@@ -87,6 +88,8 @@ With the http server, each voice has an **ear** (`sukhi_ear.mjs`): it listens to
 and keeps what it heard in `state/voices/<account>/sukhi_inbox.jsonl` (read it with `sukhi_inbox`). It never
 replies. Whom it listens to is set on the settings page, one acct per line: `user`, or `user@host` for a
 person on another server (e.g. `kuro43_@misskey.io`; sukhi is asked to resolve them with WebFinger).
+sukhi does not push a DM that comes from another server (it only saves it), so the ear also catches up
+on the conversation list every 30 seconds; those DMs arrive within that delay.
 Two kinds of events are kept: `dm` (a direct message, only two people, from that person) and `mention`
 (that person named the voice in a post: public, unlisted or followers-only, with its `visibility`). A DM
 that also arrives as a notification is kept once. The line it last heard from each person in a DM is in
