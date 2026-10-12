@@ -100,6 +100,10 @@ What counts is decided by `sukhi_filter.mjs` alone: the author has to be the per
 
 Tests: `node --test` (the clients, the ear and the connect flow run against fake servers).
 
+`sukhi_status` looks at one post (a sukhi URL or a numeric id): who wrote it, its visibility, whether it is a
+reply. A post that is gone and a post this voice cannot see (followers-only, a DM) both come back from sukhi as 404,
+so a missing one is reported as `found:false` with exactly those two possibilities, not as "deleted".
+
 ### What to keep in mind on sukhi
 
 sukhi can be read by anyone on the net, so the tools that put words out (`sukhi_post`, `sukhi_reply`,

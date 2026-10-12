@@ -116,6 +116,27 @@ export function showNotification(n) {
 const WIDTH = { direct: 0, private: 1, followers: 1, unlisted: 2, public: 3 };
 const normalize = (v) => (v === "followers" ? "private" : v);
 
+// 投稿の URL か id から、id を取り出す。sukhi の URL(/@acct/<id> か /users/<acct>/notes/<id>)だけ受ける。
+export function statusIdFrom(which, base) {
+  const text = String(which ?? "").trim();
+  if (/^\d+$/.test(text)) return text;
+  let u;
+  try {
+    u = new URL(text);
+  } catch {
+    throw new Error("投稿の id か、sukhi の投稿の URL を渡してください。");
+  }
+  if (u.host !== new URL(base).host) throw new Error(`この声が見られるのは ${new URL(base).host} の投稿だけです(${u.host} は見られません)。`);
+  const m = u.pathname.match(/\/(\d+)\/?$/);
+  if (!m) throw new Error("URL から投稿の id が読めませんでした(/@acct/<id> の形)。");
+  return m[1];
+}
+
+const SEEN_ONLY_BY = {
+  private: "フォロワー限定。フォローしている人にしか見えず、外から(ログインせずに)開くと 404 に見える。",
+  direct: "DM。宛先の人にしか見えず、外から開くと 404 に見える。",
+};
+
 // ActivityPlug の語彙では followers。Mastodon の private もその意味なので、そちらに寄せる。
 const toVisibility = (v) => (v === "private" ? "followers" : v);
 
@@ -227,6 +248,37 @@ export function createSukhi(voice, persist = () => {}) {
 
   // 人のプロフィール。ActivityPlug の mastodon アダプタにはまだ無い面なので、素の fetch で。
   // user でも user@host でもよい(他のサーバーの人は、sukhi が探しに行く)。見つからなければ、そう伝える。
+  // 投稿ひとつの様子。「削除された」と「この声には見えない」は、sukhi からは同じ 404 に見える。
+  // 見つからないときは、その二つのどちらかだと、はっきり言う(外から開いたときの 404 とも、同じ見えかた)。
+  async function readStatus({ which }) {
+    const id = statusIdFrom(which, base);
+    try {
+      const j = await api(`/api/v1/statuses/${encodeURIComponent(id)}`);
+      return {
+        found: true,
+        id: j.id,
+        url: j.url,
+        author: `@${j.account?.acct}`,
+        visibility: j.visibility,
+        ...(SEEN_ONLY_BY[normalize(j.visibility)] ? { note: SEEN_ONLY_BY[normalize(j.visibility)] } : {}),
+        in_reply_to_id: j.in_reply_to_id ?? null,
+        reply: j.in_reply_to_id ? "返信" : "返信ではない(ひとつの投稿)",
+        created_at: j.created_at,
+        text: trimHtml(j.content),
+        ...withMedia(showMedia(j.media_attachments)),
+      };
+    } catch (error) {
+      if (!/HTTP 404/.test(error.message)) throw error;
+      return {
+        found: false,
+        id,
+        message:
+          "見つからなかった。削除された投稿か、この声には見えない投稿(相手のフォロワー限定・DM など)のどちらか。" +
+          "sukhi は、この二つを区別して返さない。",
+      };
+    }
+  }
+
   async function readProfile({ who }) {
     const acct = String(who).trim().replace(/^@/, "");
     try {
@@ -369,7 +421,7 @@ export function createSukhi(voice, persist = () => {}) {
     return { ok: true, emoji, status_id: id };
   }
 
-  return { voice, api, streamUrl, readHome, readProfile, readMentions, readNotifications, unreadSummary, post, replyTo, say, ack };
+  return { voice, api, streamUrl, readHome, readProfile, readStatus, readMentions, readNotifications, unreadSummary, post, replyTo, say, ack };
 }
 
 // ── アカウントの声 ────────────────────────────────────────────────────────

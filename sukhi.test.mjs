@@ -46,7 +46,7 @@ const fake = createServer((req, res) => {
 await new Promise((r) => fake.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${fake.address().port}`;
 
-const { createSukhi, trimHtml } = await import("./sukhi.mjs");
+const { createSukhi, statusIdFrom, trimHtml } = await import("./sukhi.mjs");
 const makeVoice = (extra = {}) => ({ base, accessToken: "t", dir: voiceDir, ...extra });
 let sukhi = createSukhi(makeVoice());
 const say = (a) => sukhi.say({ to: "nyanrus", ...a });
@@ -225,6 +225,66 @@ test("replyTo: 元の投稿が見つからなければ、投稿しない", async
   original = null;
   await assert.rejects(() => sukhi.replyTo({ statusId: "gone", text: "a" }), /HTTP 404/);
   assert.equal(calls.some((c) => c.method === "POST" && c.path === "/api/v1/statuses"), false);
+});
+
+// ── sukhi_status(投稿をひとつ見る)────────────────────────────────────────
+
+const wire = (over = {}) => ({
+  id: "5748676545293750", url: "https://sukhi.test/@shiro/5748676545293750", visibility: "public", in_reply_to_id: null,
+  created_at: "2026-10-12T06:04:02Z", content: "<p>こんにちは</p>", account: { acct: "shiro_bot" }, media_attachments: [], ...over,
+});
+
+test("statusIdFrom: 数字の id・/@acct/<id>・/users/<acct>/notes/<id> から id を取る", () => {
+  const b = base;
+  assert.equal(statusIdFrom("5748676545293750", b), "5748676545293750");
+  assert.equal(statusIdFrom(`${b}/@shiro_bot/5748676545293750`, b), "5748676545293750");
+  assert.equal(statusIdFrom(`${b}/@shiro_bot/5748676545293750/`, b), "5748676545293750");
+  assert.equal(statusIdFrom(`${b}/users/shiro_bot/notes/5748676545293750`, b), "5748676545293750");
+});
+
+test("statusIdFrom: ほかのサーバーの URL・id の無い URL・ただの文字は断る", () => {
+  assert.throws(() => statusIdFrom("https://other.example/@a/123", base), /見られません/);
+  assert.throws(() => statusIdFrom(`${base}/@shiro_bot`, base), /id が読めません/);
+  assert.throws(() => statusIdFrom("hello", base), /id か、sukhi の投稿の URL/);
+});
+
+test("readStatus: あれば、誰が・公開範囲・返信かどうかを返す", async () => {
+  reset();
+  original = wire();
+  const r = await sukhi.readStatus({ which: `${base}/@shiro_bot/5748676545293750` });
+  assert.deepEqual(
+    [r.found, r.author, r.visibility, r.in_reply_to_id, r.reply, r.text, "note" in r],
+    [true, "@shiro_bot", "public", null, "返信ではない(ひとつの投稿)", "こんにちは", false],
+  );
+});
+
+test("readStatus: フォロワー限定・DM には、外から 404 に見える理由を添える", async () => {
+  reset();
+  original = wire({ visibility: "private" });
+  assert.match((await sukhi.readStatus({ which: "5748676545293750" })).note, /フォロワー限定.*404/);
+  original = wire({ visibility: "direct" });
+  assert.match((await sukhi.readStatus({ which: "5748676545293750" })).note, /DM.*404/);
+});
+
+test("readStatus: 返信なら、返信先の id を返す", async () => {
+  reset();
+  original = wire({ in_reply_to_id: "111" });
+  const r = await sukhi.readStatus({ which: "5748676545293750" });
+  assert.deepEqual([r.in_reply_to_id, r.reply], ["111", "返信"]);
+});
+
+test("readStatus: 見つからなければ found:false で、削除か見えない公開範囲か、と言う", async () => {
+  reset();
+  original = null;
+  const r = await sukhi.readStatus({ which: "42" });
+  assert.deepEqual([r.found, r.id], [false, "42"]);
+  assert.match(r.message, /削除された.*見えない/);
+});
+
+test("readStatus: 404 以外の失敗は、そのまま伝える", async () => {
+  reset();
+  tokenOk = () => false;
+  await assert.rejects(() => sukhi.readStatus({ which: "42" }), /HTTP 401/);
 });
 
 test("trimHtml はタグを落として、長ければ切る", () => {

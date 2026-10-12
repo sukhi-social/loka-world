@@ -23,7 +23,7 @@ export const LEVELS = {
   start_job: 4, stop_job: 4,
   move_to_shared_drive: 5, share_to_team: 5,
   fetch_url: 6, github_issues: 6, github_discussions: 6,
-  sukhi_read_home: 6, sukhi_profile: 6, sukhi_read_mentions: 6, sukhi_read_notifications: 6, sukhi_unread_count: 6,
+  sukhi_read_home: 6, sukhi_profile: 6, sukhi_status: 6, sukhi_read_mentions: 6, sukhi_read_notifications: 6, sukhi_unread_count: 6,
   sukhi_post: 5, sukhi_reply: 5, sukhi_say: 5, sukhi_ack: 5,
   zulip_read: 6, zulip_say: 5,
   sukhi_inbox: 1,
@@ -50,7 +50,7 @@ export const LEVEL_LABEL = { 1: "L1 読む", 2: "L2 書く", 3: "L3 呼吸", 4: 
 
 export const OPEN_WORLD = new Set([
   "fetch_url", "github_issues", "github_discussions",
-  "sukhi_read_home", "sukhi_profile", "sukhi_read_mentions", "sukhi_read_notifications", "sukhi_unread_count",
+  "sukhi_read_home", "sukhi_profile", "sukhi_status", "sukhi_read_mentions", "sukhi_read_notifications", "sukhi_unread_count",
   "sukhi_post", "sukhi_reply", "sukhi_say", "sukhi_ack",
   "zulip_read", "zulip_say",
 ]);

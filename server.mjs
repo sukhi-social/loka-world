@@ -979,6 +979,18 @@ ${closing}
   );
 
   sukhiTool(
+    "sukhi_status",
+    {
+      description:
+        "sukhi の投稿をひとつ見る。URL(https://sukhi.f3liz.casa/@誰か/数字)か、数字の id で。" +
+        "あるか、誰が書いたか、公開範囲(public / unlisted / private=フォロワー限定 / direct)、返信かどうかが分かる。" +
+        "見つからないときは found:false ── 削除されたか、この声には見えない公開範囲か、のどちらか(sukhi は区別して返さない)。読むだけ。",
+      inputSchema: { which: z.string().min(1).max(300).describe("投稿の URL か、数字の id。") },
+    },
+    ({ which }, s) => s.readStatus({ which }),
+  );
+
+  sukhiTool(
     "sukhi_read_mentions",
     { description: "sukhi の通知のうち mention(自分宛て)を読む。既読位置は動かさない。", inputSchema: { limit: sukhiLimit } },
     ({ limit }, s) => s.readMentions({ limit }),
