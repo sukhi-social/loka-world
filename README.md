@@ -74,6 +74,8 @@ voice is connected on the settings page:
 | `SUKHI_VOICE_CLIENT_ID`, `SUKHI_VOICE_CLIENT_SECRET`, `SUKHI_VOICE_REDIRECT_URI` | Use a fixed sukhi app for voices instead of registering one. |
 | `ZULIP_SITE`, `ZULIP_EMAIL`, `ZULIP_API_KEY` | Zulip (the same three values as `.zuliprc`). Owner account only for now: Zulip has no OAuth, so a per-account key needs a form. |
 
+`sukhi_profile` looks up a person's profile (`user` or `user@host`; other servers are resolved by sukhi) with a plain
+`/api/v1/accounts/lookup`, because ActivityPlug's Mastodon adapter has no account lookup yet.
 Reading tools are L6; tools that put words out (`sukhi_post`, `sukhi_reply`, `sukhi_say`, `sukhi_ack`,
 `zulip_say`) are L5. `sukhi_say` is limited to 140 characters on purpose: a DM is a conversation.
 A client that runs without a person (a scheduled agent) may stop at an L5 tool to ask for a confirmation

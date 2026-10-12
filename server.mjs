@@ -968,6 +968,17 @@ ${closing}
   );
 
   sukhiTool(
+    "sukhi_profile",
+    {
+      description:
+        "sukhi の人のプロフィールを見に行く。自己紹介、リンク、フォロー数など。読むだけ。" +
+        "who は user でも user@host でもよい(@ は付けても付けなくても)。他のサーバーの人も探しに行く。",
+      inputSchema: { who: z.string().min(1).max(200).describe("見に行く人。例: nyanrus / nyanrus@sukhi.f3liz.casa") },
+    },
+    ({ who }, s) => s.readProfile({ who }),
+  );
+
+  sukhiTool(
     "sukhi_read_mentions",
     { description: "sukhi の通知のうち mention(自分宛て)を読む。既読位置は動かさない。", inputSchema: { limit: sukhiLimit } },
     ({ limit }, s) => s.readMentions({ limit }),

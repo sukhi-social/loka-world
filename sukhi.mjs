@@ -73,6 +73,31 @@ export function showPost(post) {
   };
 }
 
+// 人のプロフィール。Mastodon の account の形から、読むのに要るところだけ。
+export function showAccount(a) {
+  const fields = (a.fields ?? []).map((f) => ({
+    name: f.name,
+    value: trimHtml(f.value, 200),
+    ...(f.verified_at ? { verified: true } : {}),
+  }));
+  return {
+    id: a.id,
+    acct: `@${a.acct}`,
+    display_name: a.display_name ?? "",
+    bio: trimHtml(a.note, 800),
+    ...(fields.length > 0 ? { fields } : {}),
+    followers: a.followers_count,
+    following: a.following_count,
+    posts: a.statuses_count,
+    bot: Boolean(a.bot),
+    locked: Boolean(a.locked),
+    created_at: a.created_at,
+    url: a.url,
+    avatar: a.avatar,
+    header: a.header,
+  };
+}
+
 export function showNotification(n) {
   const raw = n.raw ?? {};
   const acct = raw.account ?? {};
@@ -196,6 +221,18 @@ export function createSukhi(voice, persist = () => {}) {
     return page.nodes.map(showPost);
   }
 
+  // 人のプロフィール。ActivityPlug の mastodon アダプタにはまだ無い面なので、素の fetch で。
+  // user でも user@host でもよい(他のサーバーの人は、sukhi が探しに行く)。見つからなければ、そう伝える。
+  async function readProfile({ who }) {
+    const acct = String(who).trim().replace(/^@/, "");
+    try {
+      return showAccount(await api(`/api/v1/accounts/lookup?acct=${encodeURIComponent(acct)}&resolve=1`));
+    } catch (error) {
+      if (!/HTTP 404/.test(error.message)) throw error;
+      return { found: false, who: `@${acct}`, message: "その人は見つからなかった。つづりと、@host の部分を見なおしてみる。" };
+    }
+  }
+
   // 既読位置は動かさない。
   async function readMentions({ limit = 20 } = {}) {
     const page = await withAuth((c, s) => c.notifications.list({ session: s, types: ["mention"], page: { limit } }));
@@ -306,7 +343,7 @@ export function createSukhi(voice, persist = () => {}) {
     return { ok: true, emoji, status_id: id };
   }
 
-  return { voice, api, streamUrl, readHome, readMentions, readNotifications, unreadSummary, post, say, ack };
+  return { voice, api, streamUrl, readHome, readProfile, readMentions, readNotifications, unreadSummary, post, say, ack };
 }
 
 // ── アカウントの声 ────────────────────────────────────────────────────────

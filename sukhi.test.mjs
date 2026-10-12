@@ -24,6 +24,16 @@ const fake = createServer((req, res) => {
     if (req.url === "/oauth/token") return send({ access_token: "t2", refresh_token: "r2" });
     if (!tokenOk(bearer)) return res.writeHead(401).end("{}");
     if (req.url === "/api/v1/accounts/verify_credentials") return send({ id: "me" });
+    if (req.url.startsWith("/api/v1/accounts/lookup")) {
+      const acct = new URL(req.url, "http://x").searchParams.get("acct");
+      if (acct === "nobody") return res.writeHead(404).end("{}");
+      return send({
+        id: "7", acct, display_name: "Mi", note: "<p>はじめまして</p>",
+        fields: [{ name: "web", value: '<a href="https://x">x</a>', verified_at: "2026-01-01T00:00:00Z" }, { name: "memo", value: "ねこ", verified_at: null }],
+        followers_count: 3, following_count: 4, statuses_count: 5, bot: false, locked: true,
+        created_at: "2025-01-01T00:00:00Z", url: "https://x/@mi", avatar: "https://x/a.png", header: "https://x/h.png",
+      });
+    }
     if (req.url.startsWith("/api/v1/timelines/home")) return send([]);
     if (req.url.startsWith("/api/v1/conversations")) return send(conversations);
     if (req.url.endsWith("/context")) return send(context);
@@ -137,6 +147,32 @@ test("ActivityPlug 越しに読める(通信の窓口を渡している)", async
   assert.deepEqual(await sukhi.readHome({ limit: 5 }), []);
   assert.equal(calls.at(-1).path.startsWith("/api/v1/timelines/home"), true);
   assert.equal(calls.at(-1).bearer, "t");
+});
+
+test("プロフィールを見に行く(@ は付けても付けなくてもよい。他のサーバーの人は resolve で探す)", async () => {
+  reset();
+  const p = await sukhi.readProfile({ who: " @mi@other.example " });
+  assert.equal(p.acct, "@mi@other.example");
+  assert.equal(p.display_name, "Mi");
+  assert.equal(p.bio, "はじめまして");
+  assert.deepEqual(p.fields, [{ name: "web", value: "x", verified: true }, { name: "memo", value: "ねこ" }]);
+  assert.deepEqual([p.followers, p.following, p.posts, p.locked, p.bot], [3, 4, 5, true, false]);
+  const call = calls.at(-1);
+  assert.equal(call.path, "/api/v1/accounts/lookup?acct=mi%40other.example&resolve=1");
+  assert.equal(call.bearer, "t");
+});
+
+test("プロフィールが見つからなければ、見つからないと伝える(エラーにしない)", async () => {
+  reset();
+  const p = await sukhi.readProfile({ who: "nobody" });
+  assert.equal(p.found, false);
+  assert.equal(p.who, "@nobody");
+});
+
+test("プロフィール: 見つからない以外のエラー(401 など)は、そのまま伝える", async () => {
+  reset();
+  tokenOk = () => false;
+  await assert.rejects(() => sukhi.readProfile({ who: "mi" }), /HTTP 401/);
 });
 
 test("trimHtml はタグを落として、長ければ切る", () => {
