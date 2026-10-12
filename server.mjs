@@ -36,6 +36,7 @@ import { handlePortal } from "./portal.mjs";
 import { handleVoiceHttp } from "./voice_http.mjs";
 import { room } from "./room.mjs";
 import { sukhiFor } from "./sukhi.mjs";
+import { withManners } from "./sukhi_manners.mjs";
 import { readInbox } from "./sukhi_ear.mjs";
 import { startAllEars } from "./sukhi_ears.mjs";
 import { readonlyTools as accountReadonlyTools } from "./settings.mjs";
@@ -946,7 +947,7 @@ ${closing}
   const NO_VOICE =
     "この部屋の声は、まだ sukhi に繋がっていません。窓口の設定ページで「声を繋ぐ」から、ボットのアカウントで sukhi にログインしてください。";
   const sukhiTool = (name, config, handler) =>
-    reg(name, config, async (args) => {
+    reg(name, { ...config, description: withManners(name, config.description) }, async (args) => {
       const s = sukhiFor(account);
       if (!s) throw new Error(NO_VOICE);
       return asText(await handler(args, s));

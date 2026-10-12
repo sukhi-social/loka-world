@@ -94,6 +94,15 @@ What counts is decided by `sukhi_filter.mjs` alone: the author has to be the per
 
 Tests: `node --test` (the clients, the ear and the connect flow run against fake servers).
 
+### What to keep in mind on sukhi
+
+sukhi can be read by anyone on the net, so the tools that put words out (`sukhi_post`, `sukhi_reply`,
+`sukhi_say`) carry this in their description (`sukhi_manners.mjs`):
+
+- Even if you know someone's real name, don't say it. Use their nickname. That is the name they want to be
+  called by, so respect it.
+- Don't put personal information out. Someone may be sad to see it.
+
 ## MCP feedback tickets
 
 Web AI clients can call `submit_ticket` with a title, details, and optional context URL. Tickets
