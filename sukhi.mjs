@@ -15,12 +15,18 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { createActivityPlugClient } from "@activityplug/core";
+import { createActivityPlugClient, createRemoteAuthority } from "@activityplug/core";
 import { createMastodonAdapter } from "@activityplug/mastodon";
 
 import { loadVoice, saveVoice } from "./voice.mjs";
 
 const FETCH_TIMEOUT_MS = 15_000;
+
+// ActivityPlug は、通信の窓口(remoteAuthority)を渡されないと外へ出ない。素の fetch は受けないので、
+// 包んだ関数を渡す。窓口が、行き先を声の base だけに、認証の情報を同じ origin だけに、閉じてくれる。
+const remoteAuthority = createRemoteAuthority({
+  transport: (request) => fetch(request, { signal: AbortSignal.any([request.signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]) }),
+});
 const UNREAD_PROBE_LIMIT = 40;
 
 const readJson = (path) => {
@@ -131,7 +137,7 @@ export function createSukhi(voice, persist = () => {}) {
     persist(voice);
   }
 
-  const client = () => (clientCache ??= createActivityPlugClient({ adapter: createMastodonAdapter(), origin: base }));
+  const client = () => (clientCache ??= createActivityPlugClient({ adapter: createMastodonAdapter(), origin: base, remoteAuthority }));
   const session = async () => (sessionCache ??= await client().auth.injectToken({ accessToken: voice.accessToken }));
 
   // 認証エラーなら一度だけ取り直して、やり直す。

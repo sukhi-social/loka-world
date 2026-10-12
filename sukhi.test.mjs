@@ -24,6 +24,7 @@ const fake = createServer((req, res) => {
     if (req.url === "/oauth/token") return send({ access_token: "t2", refresh_token: "r2" });
     if (!tokenOk(bearer)) return res.writeHead(401).end("{}");
     if (req.url === "/api/v1/accounts/verify_credentials") return send({ id: "me" });
+    if (req.url.startsWith("/api/v1/timelines/home")) return send([]);
     if (req.url.startsWith("/api/v1/conversations")) return send(conversations);
     if (req.url.endsWith("/context")) return send(context);
     if (req.url === "/api/v1/statuses") return send({ id: "new", url: "https://x/new" });
@@ -129,6 +130,13 @@ test("取り直せない声では、401 をそのまま伝える", async () => {
   reset();
   tokenOk = () => false;
   await assert.rejects(() => ack({}), /HTTP 401/);
+});
+
+test("ActivityPlug 越しに読める(通信の窓口を渡している)", async () => {
+  reset();
+  assert.deepEqual(await sukhi.readHome({ limit: 5 }), []);
+  assert.equal(calls.at(-1).path.startsWith("/api/v1/timelines/home"), true);
+  assert.equal(calls.at(-1).bearer, "t");
 });
 
 test("trimHtml はタグを落として、長ければ切る", () => {
