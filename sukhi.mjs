@@ -15,7 +15,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { createActivityPlugClient, createRemoteAuthority } from "@activityplug/core";
+import { createActivityPlugClient, createRemoteAuthority, decodeOpaqueId } from "@activityplug/core";
 import { createMastodonAdapter } from "@activityplug/mastodon";
 
 import { loadVoice, saveVoice } from "./voice.mjs";
@@ -115,6 +115,22 @@ export function showNotification(n) {
 // 公開範囲の広さ。返事は、元の投稿より広くしない。followers は private の言い換え。
 const WIDTH = { direct: 0, private: 1, followers: 1, unlisted: 2, public: 3 };
 const normalize = (v) => (v === "followers" ? "private" : v);
+
+// 生の id でも、封筒入りの id(ap_1_…)でも受けて、生の id を返す。
+// 封筒は、投稿の id で、この声のサーバーのものであるときだけ開く。
+export function rawStatusId(value, base) {
+  const text = String(value ?? "").trim();
+  if (!text.startsWith("ap_")) return text;
+  let raw;
+  try {
+    raw = decodeOpaqueId(text);
+  } catch {
+    throw new Error("封筒入りの id(ap_1_…)が読めません。読む道具が返した id を、そのまま渡してください。");
+  }
+  if (raw.type !== "post") throw new Error(`その id は投稿の id ではありません(${raw.type})。`);
+  if (new URL(raw.origin).host !== new URL(base).host) throw new Error("その id は別のサーバーのものです。");
+  return raw.id;
+}
 
 // 投稿の URL か id から、id を取り出す。sukhi の URL(/@acct/<id> か /users/<acct>/notes/<id>)だけ受ける。
 export function statusIdFrom(which, base) {
@@ -334,24 +350,38 @@ export function createSukhi(voice, persist = () => {}) {
 
   // 元の投稿に返す。**公開範囲は、元に合わせる**(広がらない)。
   // 公開で呼ばれたなら公開で、DM なら DM で、未収載なら未収載で。狭くするのは頼める。
-  // 控えの mention の生の status_id で返せる(封筒入りの id は要らない)。
+  // 生の id(控えの mention の status_id)でも、封筒入りの id(sukhi_read_mentions の status_id)でもよい。
+  //
+  // **返す先が見つからなければ、返信としては投稿しない。** sukhi は、存在しない(見えない)返信先を
+  // エラーにせず、返信先だけ落として、ふつうの投稿として受けてしまう。ActivityPlug の封筒の道は
+  // 返信先を確かめずに送るので、以前は、削除された投稿への「返信」が、ひとつの投稿になっていた。
   async function replyTo({ statusId, text, visibility }) {
-    const original = await api(`/api/v1/statuses/${encodeURIComponent(statusId)}`);
-    const base = normalize(original.visibility ?? "public");
+    const id = rawStatusId(statusId, base);
+    let original;
+    try {
+      original = await api(`/api/v1/statuses/${encodeURIComponent(id)}`);
+    } catch (error) {
+      if (!/HTTP 404/.test(error.message)) throw error;
+      throw new Error(
+        "返信先の投稿が見つかりません。削除されたか、この声には見えない投稿(相手のフォロワー限定・DM など)です。" +
+          "返信としては投稿しませんでした。単独の投稿として置きたいなら sukhi_post を使ってください。",
+      );
+    }
+    const base_ = normalize(original.visibility ?? "public");
     const asked = visibility ? normalize(visibility) : null;
-    const chosen = asked && (WIDTH[asked] ?? 3) < (WIDTH[base] ?? 3) ? asked : base;
+    const chosen = asked && (WIDTH[asked] ?? 3) < (WIDTH[base_] ?? 3) ? asked : base_;
 
     // 宛名は自分で足す(DM は本文の @ で宛先が決まる。公開でも、呼んだ人に通知が届く)。
     const acct = original.account?.acct;
     const body = acct && !text.trimStart().startsWith(`@${acct}`) ? `@${acct} ${text}` : text;
 
-    const status = await postJson("/api/v1/statuses", { status: body, visibility: chosen, in_reply_to_id: original.id ?? statusId });
-    return {
-      url: status.url,
-      id: status.id,
-      visibility: chosen,
-      ...(asked && chosen !== asked ? { note: `元の投稿(${base})より広くはしないので、${chosen} で返しました。` } : {}),
-    };
+    const status = await postJson("/api/v1/statuses", { status: body, visibility: chosen, in_reply_to_id: original.id ?? id });
+    const linked = Boolean(status.in_reply_to_id);
+    const notes = [
+      ...(asked && chosen !== asked ? [`元の投稿(${base_})より広くはしないので、${chosen} で返しました。`] : []),
+      ...(linked ? [] : ["投稿はできたが、sukhi が返信先を付けなかった(返信としては繋がらなかった)。ひとつの投稿として見える。"]),
+    ];
+    return { url: status.url, id: status.id, visibility: chosen, linked, ...(notes.length ? { note: notes.join(" ") } : {}) };
   }
 
   // ── DM(say / ack)──────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ const voiceDir = join(dir, "voice");
 const calls = [];
 let conversations = [];
 let context = { ancestors: [] };
+let droppedReply = false; // true なら、POST /statuses の返事で in_reply_to_id を落とす(sukhi が存在しない返信先を捨てるのを真似る)
 let original = null; // GET /api/v1/statuses/:id が返す、元の投稿
 let tokenOk = (t) => t === "t"; // 401 を返すかどうかは、テストごとに差し替える
 
@@ -39,7 +40,10 @@ const fake = createServer((req, res) => {
     if (req.url.startsWith("/api/v1/conversations")) return send(conversations);
     if (req.url.endsWith("/context")) return send(context);
     if (req.method === "GET" && /^\/api\/v1\/statuses\/[^/]+$/.test(req.url)) return original ? send(original) : res.writeHead(404).end("{}");
-    if (req.url === "/api/v1/statuses") return send({ id: "new", url: "https://x/new" });
+    if (req.url === "/api/v1/statuses") {
+      const sent = body ? JSON.parse(body) : {};
+      return send({ id: "new", url: "https://x/new", in_reply_to_id: droppedReply ? null : (sent.in_reply_to_id ?? null) });
+    }
     send({});
   });
 });
@@ -47,6 +51,7 @@ await new Promise((r) => fake.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${fake.address().port}`;
 
 const { createSukhi, statusIdFrom, trimHtml } = await import("./sukhi.mjs");
+const { encodeOpaqueId } = await import("@activityplug/core");
 const makeVoice = (extra = {}) => ({ base, accessToken: "t", dir: voiceDir, ...extra });
 let sukhi = createSukhi(makeVoice());
 const say = (a) => sukhi.say({ to: "nyanrus", ...a });
@@ -220,11 +225,56 @@ test("replyTo: 宛名を二重に付けない", async () => {
   assert.equal(sentStatus().status, "@kuro43_@misskey.io もう書いてある");
 });
 
-test("replyTo: 元の投稿が見つからなければ、投稿しない", async () => {
+test("replyTo: 元の投稿が見つからなければ、返信としては投稿しない(理由と、別の道を言う)", async () => {
   reset();
   original = null;
-  await assert.rejects(() => sukhi.replyTo({ statusId: "gone", text: "a" }), /HTTP 404/);
+  await assert.rejects(() => sukhi.replyTo({ statusId: "gone", text: "a" }), /見つかりません.*削除.*見えない.*投稿しませんでした.*sukhi_post/s);
   assert.equal(calls.some((c) => c.method === "POST" && c.path === "/api/v1/statuses"), false);
+});
+
+const envelope = (id, over = {}) => encodeOpaqueId({ adapter: "mastodon", origin: base, type: "post", id, ...over });
+
+test("replyTo: 封筒入りの id も開けて、同じ確認を通す(元に合わせる)", async () => {
+  reset();
+  original = orig("private");
+  const r = await sukhi.replyTo({ statusId: envelope("m1"), text: "a" });
+  assert.equal(r.visibility, "private");
+  assert.equal(sentStatus().in_reply_to_id, "m1"); // 封筒ではなく、生の id で送る
+});
+
+test("replyTo: 封筒の先の投稿が無ければ、封筒でも投稿しない(単独の投稿にならない)", async () => {
+  reset();
+  original = null;
+  await assert.rejects(() => sukhi.replyTo({ statusId: envelope("gone"), text: "a" }), /見つかりません/);
+  assert.equal(calls.some((c) => c.method === "POST" && c.path === "/api/v1/statuses"), false);
+});
+
+test("replyTo: 壊れた封筒・別のサーバーの封筒・投稿でない封筒は断る", async () => {
+  reset();
+  original = orig("public");
+  await assert.rejects(() => sukhi.replyTo({ statusId: "ap_1_garbage", text: "a" }), /封筒|id/);
+  await assert.rejects(() => sukhi.replyTo({ statusId: envelope("m1", { origin: "https://other.example" }), text: "a" }), /別のサーバー/);
+  await assert.rejects(() => sukhi.replyTo({ statusId: envelope("m1", { type: "account" }), text: "a" }), /投稿の id ではありません/);
+  assert.equal(calls.some((c) => c.method === "POST" && c.path === "/api/v1/statuses"), false);
+});
+
+test("replyTo: 送ったのに sukhi が返信先を落としたら、そう伝える", async () => {
+  reset();
+  original = orig("public");
+  droppedReply = true; // sukhi が in_reply_to_id を捨てる
+  try {
+    const r = await sukhi.replyTo({ statusId: "m1", text: "a" });
+    assert.equal(r.linked, false);
+    assert.match(r.note, /返信としては繋がらなかった/);
+  } finally {
+    droppedReply = false;
+  }
+});
+
+test("replyTo: 返信先がちゃんと付いたら linked:true", async () => {
+  reset();
+  original = orig("public");
+  assert.equal((await sukhi.replyTo({ statusId: "m1", text: "a" })).linked, true);
 });
 
 // ── sukhi_status(投稿をひとつ見る)────────────────────────────────────────

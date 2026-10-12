@@ -1026,23 +1026,21 @@ ${closing}
     {
       description:
         "sukhi の投稿に返す。**呼ばれたこと(mention)には、これで返す**(DM で返さない)。" +
-        "控え(sukhi_inbox)の mention の status_id を status_id に渡すと、公開範囲を**元の投稿に合わせて**返す" +
-        "(公開で呼ばれたなら公開、DM なら DM。元より広くはならない。visibility は狭くしたいときだけ)。" +
-        "sukhi_read_mentions などが返した封筒入り id(ap_1_…)は in_reply_to_id に(こちらの公開範囲は visibility、省くと unlisted)。" +
-        "どちらか一つだけ。",
+        "控え(sukhi_inbox)の mention の status_id は status_id に、sukhi_read_mentions などが返した封筒入りの id(ap_1_…)は in_reply_to_id に(どちらか一つだけ)。" +
+        "**どちらも、公開範囲を元の投稿に合わせて返す**(公開で呼ばれたなら公開、DM なら DM。元より広くはならない。visibility は狭くしたいときだけ)。" +
+        "**返す先が見つからない(削除された・見えない)ときは、投稿しないで理由を返す**(ひとつの投稿として置きたいなら sukhi_post)。" +
+        "返事のあと、linked:false なら、sukhi が返信先を付けなかったということ。",
       inputSchema: {
         text: z.string().min(1),
         status_id: z.string().min(1).optional().describe("返す先の、生の status id(控えの mention の status_id)。"),
         in_reply_to_id: z.string().min(1).optional().describe("返す先の、封筒入り id(ap_1_…)。"),
-        visibility: sukhiVisibility.optional().describe("省くと、status_id なら元の投稿に合わせ、in_reply_to_id なら unlisted。"),
+        visibility: sukhiVisibility.optional().describe("省くと、元の投稿に合わせる。狭くしたいときだけ。"),
       },
     },
     ({ text, status_id, in_reply_to_id, visibility }, s) => {
       if (Boolean(status_id) === Boolean(in_reply_to_id))
         throw new Error("返す先は、status_id か in_reply_to_id の、どちらか一つだけ。");
-      return status_id
-        ? s.replyTo({ statusId: status_id, text, visibility })
-        : s.post({ text, visibility: visibility ?? "unlisted", inReplyToId: in_reply_to_id });
+      return s.replyTo({ statusId: status_id ?? in_reply_to_id, text, visibility });
     },
   );
 

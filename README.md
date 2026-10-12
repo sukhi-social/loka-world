@@ -94,8 +94,11 @@ Two kinds of events are kept: `dm` (a direct message, only two people, from that
 (that person named the voice in a post: public, unlisted or followers-only, with its `visibility`). A DM
 that also arrives as a notification is kept once. The line it last heard from each person in a DM is in
 `sukhi_heard.json` next to the inbox, and `sukhi_say` (a DM, always) / `sukhi_ack` answer that line. A `mention` is
-answered with `sukhi_reply` and the event's `status_id`: the reply takes the **same visibility as the post it answers**
-(public stays public, a DM stays a DM) and is never wider than it; asking for a narrower one is allowed.
+answered with `sukhi_reply` and the event's `status_id` (or the enveloped id from `sukhi_read_mentions`): the reply takes
+the **same visibility as the post it answers** (public stays public, a DM stays a DM) and is never wider than it; asking
+for a narrower one is allowed. If the post being answered cannot be found (deleted, or not visible to this voice),
+nothing is posted and the reason is returned: sukhi would otherwise accept the "reply", drop the reply link and publish
+an ordinary post. Use `sukhi_post` if a standalone post is what you want.
 What counts is decided by `sukhi_filter.mjs` alone: the author has to be the person themself.
 
 Tests: `node --test` (the clients, the ear and the connect flow run against fake servers).
