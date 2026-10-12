@@ -15,7 +15,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { conversationIsWith, decide, decideStatus } from "./sukhi_filter.mjs";
+import { conversationIsWith, decide, decideMention, decideStatus } from "./sukhi_filter.mjs";
 import { heardFrom } from "./sukhi_text.mjs";
 
 const SEEN_MAX = 500;
@@ -82,8 +82,11 @@ export function fileStore(dir) {
   let seq = events.at(-1)?.seq ?? 0;
 
   return {
+    // どこまで見たか。DM(direct の流れ)と mention(通知)は、別々の印を持つ。
     lastSeen: () => readJson(earFile, {}).lastSeen ?? null,
-    saveLastSeen: (lastSeen) => writeJson(earFile, { lastSeen }),
+    saveLastSeen: (lastSeen) => writeJson(earFile, { ...readJson(earFile, {}), lastSeen }),
+    lastSeenMention: () => readJson(earFile, {}).lastSeenMention ?? null,
+    saveLastSeenMention: (lastSeenMention) => writeJson(earFile, { ...readJson(earFile, {}), lastSeenMention }),
 
     append(event) {
       const row = { seq: ++seq, at: new Date().toISOString(), ...event };
@@ -131,6 +134,14 @@ export function createEar({ api, watched, me, store, log = () => {} }) {
     store.saveLastSeen(lastSeen);
   };
 
+  // mention 通知の印。通知の id で数える(status の id とは別の並び)。
+  let lastSeenMention = store.lastSeenMention();
+  const markSeenMention = (id) => {
+    if (!id || !newer(id, lastSeenMention)) return;
+    lastSeenMention = id;
+    store.saveLastSeenMention(lastSeenMention);
+  };
+
   const seen = new Set();
   const remember = (id) => {
     if (seen.has(id)) return false;
@@ -139,18 +150,21 @@ export function createEar({ api, watched, me, store, log = () => {} }) {
     return true;
   };
 
-  const heard = (d, conversationId, extra = {}) => {
+  // kind: dm(direct の流れで聞こえた)か mention(通知で、名前を呼ばれた)。
+  // DM のぶんだけ、「聞いた一通」(sukhi_say / sukhi_ack の返す先)として覚える。
+  const heard = (d, conversationId, { kind = "dm", ...extra } = {}) => {
     const row = store.append({
-      kind: "dm",
+      kind,
       acct: acctByUri.get(d.fromUri) ?? null,
       text: heardFrom(d.text),
       status_id: d.statusId,
       conversation_id: conversationId ?? null,
+      ...(kind === "mention" ? { visibility: d.visibility } : {}),
       media: d.media ?? [],
       ...extra,
     });
-    store.hear(row);
-    log(`拾った  ${extra.late ? "(留守のぶん) " : ""}@${row.acct} status=${d.statusId}`);
+    if (kind === "dm") store.hear(row);
+    log(`拾った  ${extra.late ? "(留守のぶん) " : ""}${kind} @${row.acct} status=${d.statusId}`);
     return row;
   };
 
@@ -170,7 +184,7 @@ export function createEar({ api, watched, me, store, log = () => {} }) {
     } catch {
       return;
     }
-    if (frame.event !== "conversation") return;
+    if (frame.event !== "conversation" && frame.event !== "notification") return;
 
     // Mastodon は payload を二重に JSON 文字列化する。
     let payload = frame.payload;
@@ -181,6 +195,8 @@ export function createEar({ api, watched, me, store, log = () => {} }) {
         return;
       }
     }
+
+    if (frame.event === "notification") return handleNotification(payload);
 
     // 出ていったぶん。自分の名前で何が言われたかは、ここでしか知れない。
     // 外に出たという事実で、「言えた」が分かる(自己申告ではなく)。
@@ -209,13 +225,51 @@ export function createEar({ api, watched, me, store, log = () => {} }) {
     markSeen(d.statusId);
   }
 
+  // 名前を呼ばれた(mention 通知)。DM は direct の流れのほうが決めるので、ここでは通らない。
+  function handleNotification(payload) {
+    const d = decideMention(payload, uris);
+    if (!d.ok) return;
+    markSeenMention(d.notificationId);
+    if (!remember(d.statusId)) return;
+    heard(d, null, { kind: "mention" });
+  }
+
+  // 拾い直しの最中に来たフレームは、DM も mention も、ぜんぶ脇に置く(終わってから処理する)。
   async function catchUp() {
     catchingUp = true;
     try {
       await catchUpInner();
+      await catchUpMentions();
     } finally {
       catchingUp = false;
       for (const raw of queued.splice(0)) handleFrame(raw);
+    }
+  }
+
+  async function catchUpMentions() {
+    let list;
+    try {
+      list = await api("/api/v1/notifications?types[]=mention&limit=40");
+    } catch (e) {
+      log(`mention の留守のぶんを見にいけなかった: ${e.message}`);
+      return;
+    }
+    if (!Array.isArray(list)) return;
+
+    // はじめての起動なら、過去を蒸し返さず、いまの位置から聴く。
+    if (lastSeenMention === null) {
+      for (const n of list) markSeenMention(n.id);
+      log(`mention も、いまの位置(${lastSeenMention ?? "なし"})から聴きます。`);
+      return;
+    }
+
+    const pending = list
+      .filter((n) => newer(n.id, lastSeenMention))
+      .map((n) => ({ n, d: decideMention(n, uris) }))
+      .sort((x, y) => (newer(x.n.id, y.n.id) ? 1 : -1)); // 古いほうから
+    for (const { n, d } of pending) {
+      markSeenMention(n.id); // 通らなかった通知も、印は進める(読んだ、という意味で)
+      if (d.ok && remember(d.statusId)) heard(d, null, { kind: "mention", late: true });
     }
   }
 
@@ -283,11 +337,11 @@ export function createEar({ api, watched, me, store, log = () => {} }) {
 
 // 名簿を actor URI に直す。引けなかった人は黙って外す
 // ── まだアカウントを作っていない相手を、名前だけ並べておけるように。
-async function lookupWatched(api, accts, log) {
+export async function lookupWatched(api, accts, log) {
   const out = [];
   for (const acct of accts) {
     try {
-      const uri = (await api(`/api/v1/accounts/lookup?acct=${encodeURIComponent(acct)}`)).uri;
+      const uri = (await api(`/api/v1/accounts/lookup?acct=${encodeURIComponent(acct)}&resolve=1`)).uri;
       if (uri) out.push({ acct, uri });
     } catch (e) {
       log(`(まだ居ないみたい: @${acct} — ${e.message})`);
@@ -321,6 +375,8 @@ export async function startEar({ sukhi, accts, dir, log = console.error }) {
     ws = new WebSocket(streamUrl("direct"));
     ws.addEventListener("open", () => {
       backoff = 1000;
+      // direct(DM)は繋ぐときに選んである。名前を呼ばれたぶん(mention 通知)は user の流れ。
+      ws.send(JSON.stringify({ type: "subscribe", stream: "user" }));
       // 繋がった「あと」に拾い直す。逆だと、その隙間がまた空く。
       ear.catchUp().catch((e) => log(`拾い直しで転んだ: ${e.message}`));
     });

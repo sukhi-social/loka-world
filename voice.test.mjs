@@ -8,7 +8,7 @@ process.env.WORLD_DATA = mkdtempSync(join(tmpdir(), "loka-voice-"));
 delete process.env.MASTODON_API_BASE_URL;
 delete process.env.MASTODON_ACCESS_TOKEN;
 
-const { dropVoice, loadVoice, saveVoice, voiceAccounts, voiceDir } = await import("./voice.mjs");
+const { dropVoice, loadVoice, parseWatch, saveVoice, voiceAccounts, voiceDir } = await import("./voice.mjs");
 const { ownerAccount } = await import("./auth.mjs");
 
 const bot = { base: "https://sukhi.test", accessToken: "tok", acct: "shiro_bot", watch: ["kuro"], connectedAt: "2026-10-12T00:00:00Z" };
@@ -59,6 +59,17 @@ test("環境変数の声は、持ち主だけ。しまった声のほうが先",
     delete process.env.MASTODON_API_BASE_URL;
     delete process.env.MASTODON_ACCESS_TOKEN;
   }
+});
+
+test("聴く相手は、改行・空白・カンマ区切り。別のサーバーの人も書ける", () => {
+  assert.deepEqual(parseWatch("@nyanrus\nkuro43_@misskey.io, kuro43_  nyanrus"), ["nyanrus", "kuro43_@misskey.io", "kuro43_"]);
+  assert.deepEqual(parseWatch("  \n "), []);
+});
+
+test("acct の形でないものは断る。多すぎるのも", () => {
+  assert.throws(() => parseWatch("good\nhttps://evil.example/users/x"), /acct の形/);
+  assert.throws(() => parseWatch("a@b@c"), /acct の形/);
+  assert.throws(() => parseWatch(Array.from({ length: 21 }, (_, i) => `u${i}`).join(",")), /20 人まで/);
 });
 
 test.after(() => rmSync(process.env.WORLD_DATA, { recursive: true, force: true }));

@@ -90,3 +90,15 @@ export function voiceAccounts() {
   if (envVoice(ownerAccount())) accounts.add(ownerAccount());
   return [...accounts];
 }
+
+// 聴く相手の入力(改行かカンマ区切り)。`user` か `user@host`(別のサーバーの人)。先頭の @ は落とす。
+const WATCH_ONE = /^[A-Za-z0-9_.-]+(@[A-Za-z0-9.-]+)?$/;
+export const WATCH_MAX = 20;
+
+export function parseWatch(input) {
+  const names = [...new Set(String(input ?? "").split(/[\s,]+/).map((a) => a.replace(/^@/, "")).filter(Boolean))];
+  const bad = names.find((a) => !WATCH_ONE.test(a));
+  if (bad) throw new Error(`「${bad}」は、acct の形(user か user@host)ではありません。`);
+  if (names.length > WATCH_MAX) throw new Error(`聴く相手は ${WATCH_MAX} 人までです。`);
+  return names;
+}

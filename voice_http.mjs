@@ -3,6 +3,7 @@
 //   GET  /voice/connect                 窓口の設定ページから。sukhi の同意へ(read write の、声専用アプリ)
 //   GET  /oauth/sukhi/voice-callback    sukhi からの戻り。token をしまって、耳を立てる
 //   POST /voice/token                   ログインの代わりに、token を貼って繋ぐ(ボットの access token)
+//   POST /voice/watch                   聴く相手を決める(user か user@host。別のサーバーの人も)
 //   POST /voice/disconnect              声を外す(聞いた控えは残る)
 //
 // 戻ってきたとき、「いま窓口に入っている人」が「繋ぎにいった人」と同じかを必ず確かめる。
@@ -11,11 +12,11 @@
 import { accountFrom, signState, verifyState, visitOk } from "./auth.mjs";
 import { sukhiAuthorizeUrl, sukhiBase, sukhiExchange, sukhiVerify } from "./sukhi_login.mjs";
 import { ensureEar, stopEar } from "./sukhi_ears.mjs";
-import { dropVoice, saveVoice } from "./voice.mjs";
+import { dropVoice, loadVoice, parseWatch, saveVoice } from "./voice.mjs";
 import { escapeHtml, originOf, page, parseCookies, readBody, sendHtml } from "./web.mjs";
 
 const STATE_TTL_MS = 10 * 60 * 1000;
-const PATHS = new Set(["/voice/connect", "/voice/token", "/voice/disconnect", "/oauth/sukhi/voice-callback"]);
+const PATHS = new Set(["/voice/connect", "/voice/token", "/voice/watch", "/voice/disconnect", "/oauth/sukhi/voice-callback"]);
 
 const back = (res, query) => {
   res.writeHead(302, { location: `/settings?${query}` });
@@ -69,6 +70,21 @@ export async function handleVoiceHttp(req, res, url) {
       return true;
     } catch (e) {
       return fail(res, 502, `sukhi と話せません: ${e.message}`);
+    }
+  }
+
+  if (path === "/voice/watch" && req.method === "POST") {
+    const voice = loadVoice(account);
+    if (!voice) return fail(res, 400, "声がまだ繋がっていません。");
+    // サーバーの設定の声は、設定のほう(SUKHI_EAR_ACCTS)で決める。ここで直すと、環境の token を写してしまう。
+    if (voice.connectedAt === "env") return fail(res, 400, "サーバーの設定の声は、聴く相手も SUKHI_EAR_ACCTS で決めます。");
+    try {
+      const watch = parseWatch(new URLSearchParams(await readBody(req)).get("watch"));
+      saveVoice(account, { ...voice, watch });
+      ensureEar(account).catch(() => {}); // 聴く相手が変わったので、耳を立てなおす
+      return back(res, "voice=watch");
+    } catch (e) {
+      return fail(res, 400, e.message);
     }
   }
 

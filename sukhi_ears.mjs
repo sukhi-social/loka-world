@@ -9,6 +9,9 @@ import { loadVoice, voiceAccounts } from "./voice.mjs";
 
 const ears = new Map(); // account → { stamp, stop }
 
+// 繋ぎなおし・聴く相手の変更のどちらでも、立てなおす。
+const stampOf = (voice) => `${voice.connectedAt}|${(voice.watch ?? []).join(",")}`;
+
 export function stopEar(account) {
   ears.get(account)?.stop();
   ears.delete(account);
@@ -19,11 +22,11 @@ export async function ensureEar(account, log = (...a) => console.error(`sukhi-ea
   const voice = loadVoice(account);
   if (!voice) return stopEar(account);
   const hit = ears.get(account);
-  if (hit?.stamp === voice.connectedAt) return;
+  if (hit?.stamp === stampOf(voice)) return;
 
   stopEar(account);
   // 立てているあいだに、もう一度呼ばれても二重にならないよう、先に席を取る。
-  const seat = { stamp: voice.connectedAt, stop: () => {} };
+  const seat = { stamp: stampOf(voice), stop: () => {} };
   ears.set(account, seat);
   try {
     const ear = await startEar({ sukhi: sukhiFor(account), accts: voice.watch ?? [], dir: voice.dir, log });

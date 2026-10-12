@@ -134,3 +134,54 @@ export function decide(payload, watched) {
   const d = decideStatus(payload.last_status, withThem.withUri);
   return d.ok ? { ...d, fromUri: withThem.withUri } : d;
 }
+
+/**
+ * mention 通知を見て、応えていいかを決める。公開・非公開の投稿で、シロの名前を呼ばれたとき。
+ *
+ * DM(direct)はここでは通さない。三人の DM を通さない決まり(`conversationIsWith`)は
+ * 会話の側にしか無いので、direct は direct の流れで決める。
+ * ほかは DM と同じ ── 書いた人が、拾いたい相手その人であること。誰かが呼ばれた、だけでは動かない。
+ *
+ * @param {object} notification  Mastodon Notification(type: "mention")
+ * @param {string|string[]} watched  拾いたい相手の actor URI
+ * @returns {{ok: boolean, reason: string, statusId?: string, notificationId?: string, text?: string, media?: object[], visibility?: string, fromUri?: string}}
+ */
+export function decideMention(notification, watched) {
+  const allowed = allowList(watched);
+  if (allowed.length === 0) return { ok: false, reason: "拾いたい相手の URI が無い" };
+  if (!notification || typeof notification !== "object") return { ok: false, reason: "通知が読めない" };
+  if (notification.type !== "mention") return { ok: false, reason: `mention でない (${notification.type ?? "?"})` };
+
+  const status = notification.status;
+  if (!status || typeof status !== "object") return { ok: false, reason: "status が無い" };
+  if (status.visibility === "direct") return { ok: false, reason: "direct は direct の流れで見る" };
+
+  // 通知の送り主と、投稿の書き手が、ともに相手その人であること。
+  const authorUri = trimSlash(status.account?.uri);
+  if (!authorUri) return { ok: false, reason: "書いた人の uri が無い" };
+  if (!allowed.includes(authorUri)) return { ok: false, reason: `よその人が書いた (${authorUri})` };
+  const senderUri = trimSlash(notification.account?.uri);
+  if (senderUri !== authorUri) return { ok: false, reason: "通知の送り主と書いた人が違う" };
+
+  if (typeof status.id !== "string" || status.id === "") return { ok: false, reason: "status の id が無い" };
+
+  // 添付は、あることを必ず言う(decideStatus と同じ)。
+  const media = Array.isArray(status.media_attachments)
+    ? status.media_attachments.map((m) => ({
+        type: m.type ?? "unknown",
+        url: m.url ?? m.preview_url ?? null,
+        description: m.description ?? null,
+      }))
+    : [];
+
+  return {
+    ok: true,
+    reason: "ok",
+    statusId: status.id,
+    notificationId: typeof notification.id === "string" ? notification.id : null,
+    text: status.content ?? "",
+    media,
+    visibility: status.visibility ?? "public",
+    fromUri: authorUri,
+  };
+}

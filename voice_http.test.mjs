@@ -133,6 +133,38 @@ test("空の token は断る。窓口に入っていない人も", async () => {
   assert.equal((await fetch(`${base}/voice/token`, { method: "POST", body: "token=x" })).status, 401);
 });
 
+test("聴く相手を変える。別のサーバーの人も書ける", async () => {
+  const r = await post("/voice/watch", "token_user", { watch: "@kuro43_@misskey.io\nnyanrus" });
+  assert.equal(r.headers.get("location"), "/settings?voice=watch");
+  assert.deepEqual(loadVoice("token_user").watch, ["kuro43_@misskey.io", "nyanrus"]);
+  assert.equal(loadVoice("token_user").accessToken, "pasted-token"); // 鍵は変わらない
+});
+
+test("聴く相手の入力が acct の形でなければ断り、いまの相手を残す", async () => {
+  const r = await post("/voice/watch", "token_user", { watch: "https://evil.example/users/x" });
+  assert.equal(r.status, 400);
+  assert.deepEqual(loadVoice("token_user").watch, ["kuro43_@misskey.io", "nyanrus"]);
+});
+
+test("声が無い人・窓口に入っていない人は、聴く相手を変えられない", async () => {
+  assert.equal((await post("/voice/watch", "no_voice_yet", { watch: "x" })).status, 400);
+  assert.equal((await fetch(`${base}/voice/watch`, { method: "POST", body: "watch=x" })).status, 401);
+});
+
+test("サーバーの設定の声では、ここで聴く相手を変えない(環境の token を写さないため)", async () => {
+  process.env.MASTODON_API_BASE_URL = base.replace("127.0.0.1", "127.0.0.1");
+  process.env.MASTODON_ACCESS_TOKEN = "env-token";
+  try {
+    const { ownerAccount } = await import("./auth.mjs");
+    const r = await post("/voice/watch", ownerAccount(), { watch: "x" });
+    assert.equal(r.status, 400);
+    assert.equal(existsSync(join(voiceDir(ownerAccount()), "voice.json")), false);
+  } finally {
+    delete process.env.MASTODON_API_BASE_URL;
+    delete process.env.MASTODON_ACCESS_TOKEN;
+  }
+});
+
 test("声専用のアプリは、ログイン用とは別に登録される", () => {
   const app = JSON.parse(readFileSync(join(process.env.WORLD_DATA, "state", "sukhi_voice_app.json"), "utf-8"));
   assert.equal(app.scope, "read write");

@@ -361,13 +361,18 @@ function loginPage(message, req) {
 // アカウントごとの設定。いまは「読み取り専用と申告する道具」だけ。
 function voiceSection(account, note) {
   const v = loadVoice(account);
-  const notes = { connected: "声を繋ぎました。", dropped: "声を外しました。" };
+  const notes = { connected: "声を繋ぎました。", dropped: "声を外しました。", watch: "聴く相手を変えました。" };
   const status = !v
     ? `<p class="muted">まだ繋がっていません。ボットのアカウントで sukhi にログインすると、その声で話せます。</p>`
     : v.connectedAt === "env"
       ? `<p>サーバーの設定の声(持ち主)で繋がっています。</p>`
       : `<p>@${escapeHtml(v.acct ?? "?")} の声で繋がっています。<span class="muted">(${escapeHtml(v.connectedAt)}${v.via === "token" ? "、token" : ""})</span></p>
-         <p class="muted">聴いている相手: ${v.watch?.length ? v.watch.map((a) => `@${escapeHtml(a)}`).join(" ") : "なし"}</p>`;
+         <form method="post" action="/voice/watch">
+           <p class="muted">聴いている相手(1 行に 1 つ。<code>user</code> か、別のサーバーの <code>user@host</code>)。
+             この人からの DM と、名前を呼ぶ投稿(公開でも)を拾います。</p>
+           <textarea name="watch" rows="3" cols="36">${escapeHtml((v.watch ?? []).join("\n"))}</textarea>
+           <p><button type="submit">この人たちを聴く</button></p>
+         </form>`;
   const disconnect =
     v && v.connectedAt !== "env"
       ? `<form method="post" action="/voice/disconnect"><p><button type="submit">声を外す</button></p></form>`

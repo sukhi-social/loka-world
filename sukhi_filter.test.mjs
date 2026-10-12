@@ -296,3 +296,46 @@ test("文字ひとつの名簿も、今までどおり", () => {
   assert.equal(decide(convoWith(NYANRUS), NYANRUS).ok, true);
   assert.equal(decide(convoWith(HINATA), NYANRUS).ok, false);
 });
+
+// ── mention 通知 ──────────────────────────────────────────────────────────
+
+import { decideMention } from "./sukhi_filter.mjs";
+
+const NYAN_URI = "https://misskey.io/users/abc";
+const mention = (over = {}, status = {}) => ({
+  id: "n1",
+  type: "mention",
+  account: { uri: NYAN_URI },
+  status: { id: "s1", visibility: "public", content: "<p>@shiro やあ</p>", account: { uri: NYAN_URI }, media_attachments: [], ...status },
+  ...over,
+});
+
+test("decideMention: 相手本人の公開メンションを通す", () => {
+  const d = decideMention(mention(), NYAN_URI);
+  assert.deepEqual([d.ok, d.statusId, d.notificationId, d.visibility, d.fromUri], [true, "s1", "n1", "public", NYAN_URI]);
+});
+
+test("decideMention: unlisted・private も通す。direct は通さない", () => {
+  assert.equal(decideMention(mention({}, { visibility: "unlisted" }), NYAN_URI).ok, true);
+  assert.equal(decideMention(mention({}, { visibility: "private" }), NYAN_URI).ok, true);
+  assert.match(decideMention(mention({}, { visibility: "direct" }), NYAN_URI).reason, /direct/);
+});
+
+test("decideMention: よその人・送り主と書き手の食い違い・mention でないものは通さない", () => {
+  const other = { uri: "https://evil.example/users/x" };
+  assert.equal(decideMention(mention({ account: other }, { account: other }), NYAN_URI).ok, false);
+  assert.equal(decideMention(mention({ account: other }), NYAN_URI).ok, false);
+  assert.equal(decideMention(mention({ type: "favourite" }), NYAN_URI).ok, false);
+  assert.equal(decideMention(mention({ status: undefined }), NYAN_URI).ok, false);
+});
+
+test("decideMention: 名簿が空・id が無いときは通さない。末尾のスラッシュは許す", () => {
+  assert.equal(decideMention(mention(), []).ok, false);
+  assert.equal(decideMention(mention({}, { id: "" }), NYAN_URI).ok, false);
+  assert.equal(decideMention(mention(), `${NYAN_URI}/`).ok, true);
+});
+
+test("decideMention: 添付があることを言う", () => {
+  const d = decideMention(mention({}, { media_attachments: [{ type: "image", url: "https://x/a.png", description: "ねこ" }] }), NYAN_URI);
+  assert.deepEqual(d.media, [{ type: "image", url: "https://x/a.png", description: "ねこ" }]);
+});

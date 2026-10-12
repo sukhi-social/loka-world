@@ -80,12 +80,17 @@ A client that runs without a person (a scheduled agent) may stop at an L5 tool t
 nobody can give. Marking a tool read-only on the settings page skips that confirmation, so choose those
 deliberately.
 
-With the http server, each voice has an **ear** (`sukhi_ear.mjs`): it listens to sukhi's direct stream,
-catches up on what came while the server was down, and keeps what it heard in
-`state/voices/<account>/sukhi_inbox.jsonl` (read it with `sukhi_inbox`). It never replies. The line it
-last heard from each person is in `sukhi_heard.json` next to it, and `sukhi_say` / `sukhi_ack` answer that
-line. Which DMs count is decided by `sukhi_filter.mjs` alone: direct, two people only, written by the
-person themself.
+With the http server, each voice has an **ear** (`sukhi_ear.mjs`): it listens to sukhi's
+`direct` stream (DMs) and `user` stream (notifications), catches up on what came while the server was down,
+and keeps what it heard in `state/voices/<account>/sukhi_inbox.jsonl` (read it with `sukhi_inbox`). It never
+replies. Whom it listens to is set on the settings page, one acct per line: `user`, or `user@host` for a
+person on another server (e.g. `kuro43_@misskey.io`; sukhi is asked to resolve them with WebFinger).
+Two kinds of events are kept: `dm` (a direct message, only two people, from that person) and `mention`
+(that person named the voice in a post: public, unlisted or followers-only, with its `visibility`). A DM
+that also arrives as a notification is kept once. The line it last heard from each person in a DM is in
+`sukhi_heard.json` next to the inbox, and `sukhi_say` / `sukhi_ack` answer that line; to answer a mention,
+use `sukhi_reply` with the id from `sukhi_read_mentions`, or `sukhi_ack` with the event's `status_id`.
+What counts is decided by `sukhi_filter.mjs` alone: the author has to be the person themself.
 
 Tests: `node --test` (the clients, the ear and the connect flow run against fake servers).
 
