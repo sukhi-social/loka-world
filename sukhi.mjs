@@ -112,6 +112,10 @@ export function showNotification(n) {
   };
 }
 
+// 公開範囲の広さ。返事は、元の投稿より広くしない。followers は private の言い換え。
+const WIDTH = { direct: 0, private: 1, followers: 1, unlisted: 2, public: 3 };
+const normalize = (v) => (v === "followers" ? "private" : v);
+
 // ActivityPlug の語彙では followers。Mastodon の private もその意味なので、そちらに寄せる。
 const toVisibility = (v) => (v === "private" ? "followers" : v);
 
@@ -276,6 +280,28 @@ export function createSukhi(voice, persist = () => {}) {
     return { url: created.url, id: created.ref.id };
   }
 
+  // 元の投稿に返す。**公開範囲は、元に合わせる**(広がらない)。
+  // 公開で呼ばれたなら公開で、DM なら DM で、未収載なら未収載で。狭くするのは頼める。
+  // 控えの mention の生の status_id で返せる(封筒入りの id は要らない)。
+  async function replyTo({ statusId, text, visibility }) {
+    const original = await api(`/api/v1/statuses/${encodeURIComponent(statusId)}`);
+    const base = normalize(original.visibility ?? "public");
+    const asked = visibility ? normalize(visibility) : null;
+    const chosen = asked && (WIDTH[asked] ?? 3) < (WIDTH[base] ?? 3) ? asked : base;
+
+    // 宛名は自分で足す(DM は本文の @ で宛先が決まる。公開でも、呼んだ人に通知が届く)。
+    const acct = original.account?.acct;
+    const body = acct && !text.trimStart().startsWith(`@${acct}`) ? `@${acct} ${text}` : text;
+
+    const status = await postJson("/api/v1/statuses", { status: body, visibility: chosen, in_reply_to_id: original.id ?? statusId });
+    return {
+      url: status.url,
+      id: status.id,
+      visibility: chosen,
+      ...(asked && chosen !== asked ? { note: `元の投稿(${base})より広くはしないので、${chosen} で返しました。` } : {}),
+    };
+  }
+
   // ── DM(say / ack)──────────────────────────────────────────────────────
   //
   // **返す先は「その人が最後に書いた一通」。会話の最後の一通では、ない。**
@@ -343,7 +369,7 @@ export function createSukhi(voice, persist = () => {}) {
     return { ok: true, emoji, status_id: id };
   }
 
-  return { voice, api, streamUrl, readHome, readProfile, readMentions, readNotifications, unreadSummary, post, say, ack };
+  return { voice, api, streamUrl, readHome, readProfile, readMentions, readNotifications, unreadSummary, post, replyTo, say, ack };
 }
 
 // ── アカウントの声 ────────────────────────────────────────────────────────

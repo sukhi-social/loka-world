@@ -12,6 +12,7 @@ const voiceDir = join(dir, "voice");
 const calls = [];
 let conversations = [];
 let context = { ancestors: [] };
+let original = null; // GET /api/v1/statuses/:id が返す、元の投稿
 let tokenOk = (t) => t === "t"; // 401 を返すかどうかは、テストごとに差し替える
 
 const fake = createServer((req, res) => {
@@ -37,6 +38,7 @@ const fake = createServer((req, res) => {
     if (req.url.startsWith("/api/v1/timelines/home")) return send([]);
     if (req.url.startsWith("/api/v1/conversations")) return send(conversations);
     if (req.url.endsWith("/context")) return send(context);
+    if (req.method === "GET" && /^\/api\/v1\/statuses\/[^/]+$/.test(req.url)) return original ? send(original) : res.writeHead(404).end("{}");
     if (req.url === "/api/v1/statuses") return send({ id: "new", url: "https://x/new" });
     send({});
   });
@@ -173,6 +175,56 @@ test("プロフィール: 見つからない以外のエラー(401 など)は、
   reset();
   tokenOk = () => false;
   await assert.rejects(() => sukhi.readProfile({ who: "mi" }), /HTTP 401/);
+});
+
+// ── mention への返事(元の投稿に合わせる)────────────────────────────────────
+
+const orig = (visibility, acct = "kuro43_@misskey.io") => ({ id: "m1", visibility, account: { acct } });
+const sentStatus = () => calls.find((c) => c.method === "POST" && c.path === "/api/v1/statuses").body;
+
+for (const v of ["public", "unlisted", "private", "direct"]) {
+  test(`replyTo: 元が ${v} なら、同じ ${v} で返す。宛名と返信先が付く`, async () => {
+    reset();
+    original = orig(v);
+    const r = await sukhi.replyTo({ statusId: "m1", text: "こんにちは" });
+    assert.equal(r.visibility, v);
+    assert.deepEqual(
+      [sentStatus().status, sentStatus().visibility, sentStatus().in_reply_to_id],
+      ["@kuro43_@misskey.io こんにちは", v, "m1"],
+    );
+  });
+}
+
+test("replyTo: 元より広くは出さない。狭くするのは頼める", async () => {
+  reset();
+  original = orig("unlisted");
+  assert.equal((await sukhi.replyTo({ statusId: "m1", text: "a", visibility: "public" })).visibility, "unlisted");
+  assert.equal(sentStatus().visibility, "unlisted");
+
+  reset();
+  original = orig("public");
+  assert.equal((await sukhi.replyTo({ statusId: "m1", text: "a", visibility: "unlisted" })).visibility, "unlisted");
+  assert.equal((await sukhi.replyTo({ statusId: "m1", text: "a", visibility: "followers" })).visibility, "private"); // 言い換えも受ける
+});
+
+test("replyTo: DM への返事を、公開にはしない", async () => {
+  reset();
+  original = orig("direct");
+  assert.equal((await sukhi.replyTo({ statusId: "m1", text: "a", visibility: "public" })).visibility, "direct");
+});
+
+test("replyTo: 宛名を二重に付けない", async () => {
+  reset();
+  original = orig("public");
+  await sukhi.replyTo({ statusId: "m1", text: "@kuro43_@misskey.io もう書いてある" });
+  assert.equal(sentStatus().status, "@kuro43_@misskey.io もう書いてある");
+});
+
+test("replyTo: 元の投稿が見つからなければ、投稿しない", async () => {
+  reset();
+  original = null;
+  await assert.rejects(() => sukhi.replyTo({ statusId: "gone", text: "a" }), /HTTP 404/);
+  assert.equal(calls.some((c) => c.method === "POST" && c.path === "/api/v1/statuses"), false);
 });
 
 test("trimHtml はタグを落として、長ければ切る", () => {
