@@ -129,6 +129,18 @@ const realSleep = (ms, signal) =>
     signal?.addEventListener("abort", finish, { once: true });
   });
 
+// 待つ。beat があれば、beatMs(既定 10 秒)ごとに区切って、そのたびに呼ぶ ── 呼び手の「返事が来ない」の時計を、巻き戻してもらうため。
+async function nap(env, ms) {
+  if (!env.beat) return env.sleep(ms, env.signal);
+  const step = env.beatMs ?? 10_000;
+  for (let left = ms; left > 0 && !env.signal?.aborted; ) {
+    const part = Math.min(left, step);
+    await env.sleep(part, env.signal);
+    left -= part;
+    await env.beat();
+  }
+}
+
 const clamp = (n, lo, hi) => Math.min(Math.max(Number(n), lo), hi);
 const MAX_WAIT_SECONDS = 3600;
 
@@ -139,7 +151,7 @@ async function waitStep(step, id, ctx, call, env, remainingMs) {
   const waited = () => Math.round((env.now() - started) / 100) / 10;
 
   if (w.tool === undefined) {
-    await env.sleep(Math.min(clamp(w.seconds, 0, MAX_WAIT_SECONDS) * 1000, remainingMs()), env.signal);
+    await nap(env, Math.min(clamp(w.seconds, 0, MAX_WAIT_SECONDS) * 1000, remainingMs()));
     return { wait: { satisfied: true, polls: 0, waited_seconds: waited() } };
   }
 
@@ -161,18 +173,19 @@ async function waitStep(step, id, ctx, call, env, remainingMs) {
     // 道具が「次は何秒あとに」と教えてくれるなら、それに従う(every より短くはしない)。
     const hint = typeof w.every_ref === "string" ? lookup(ctx, w.every_ref) : undefined;
     const gap = typeof hint === "number" && hint > 0 ? Math.max(every, Math.min(hint * 1000, 300_000)) : every;
-    await env.sleep(Math.min(gap, left), env.signal);
+    await nap(env, Math.min(gap, left));
   }
 }
 
 /**
  * @param {object[]} steps
  * @param {(tool: string, args: object) => Promise<any>} call
- * @param {{ now?: () => number, sleep?: (ms: number, signal?: AbortSignal) => Promise<void>, signal?: AbortSignal, budgetMs?: number }} [env]
+ * @param {{ now?: () => number, sleep?: (ms: number, signal?: AbortSignal) => Promise<void>, signal?: AbortSignal, budgetMs?: number, beat?: () => Promise<void>, beatMs?: number }} [env]
  *   now / sleep は試験用に差し替えられる。budgetMs は、流れ全体で待てる合計(既定: 制限なし)。
+ *   beat は、待つあいだ beatMs(既定 10 秒)ごとに呼ぶ(進み具合の通知を送るため)。
  */
 export async function runFlow(steps, call, env = {}) {
-  const e = { now: env.now ?? Date.now, sleep: env.sleep ?? realSleep, signal: env.signal };
+  const e = { now: env.now ?? Date.now, sleep: env.sleep ?? realSleep, signal: env.signal, beat: env.beat, beatMs: env.beatMs };
   const budgetMs = env.budgetMs ?? Number.POSITIVE_INFINITY;
   const flowStart = e.now();
   const remainingMs = () => Math.max(0, budgetMs - (e.now() - flowStart));

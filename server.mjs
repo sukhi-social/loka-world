@@ -52,6 +52,9 @@ import { handle as handleOutgoing } from "./outgoing.mjs";
 import { CONFIRM_ALWAYS, flowRefusal, isDirect, LEVELS, modernize, needsReview, resolveTool, waitRefusal, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
 import { originOf, sendJson } from "./web.mjs";
 
+// 試し中: 返事を流れる形(SSE)にして、待つあいだ progress を送る。呼び手の 60 秒の時計が巻き戻るかを見る。
+const MCP_SSE = process.env.WORLD_MCP_SSE === "1";
+
 const asText = (value) => {
   const structured =
     value && typeof value === "object"
@@ -703,7 +706,23 @@ ${closing}
           : runOp(r.op, r.args, extra);
       };
       // 呼び手が切れたら(extra.signal)待つのをやめる。待てる合計は流れ全体で決まっている。
-      return asText(await runFlow(steps, call, { signal: extra?.signal, budgetMs: flowBudgetSeconds() * 1000 }));
+      // 呼び手が progressToken をくれていて、返事が流れる形(SSE)なら、待つあいだ progress を送る。
+      const progressToken = extra?._meta?.progressToken;
+      let beats = 0;
+      const beat =
+        MCP_SSE && progressToken !== undefined
+          ? async () => {
+              beats += 1;
+              try {
+                await extra.sendNotification({ method: "notifications/progress", params: { progressToken, progress: beats, message: "待っています" } });
+              } catch {
+                // 送れなくても、待つ仕事は続ける。
+              }
+            }
+          : undefined;
+      const result = await runFlow(steps, call, { signal: extra?.signal, budgetMs: flowBudgetSeconds() * 1000, beat });
+      // 試し中は、呼び手が progressToken をくれたか・何回送ったかを、返事に添える(巻き戻るかを見るため)。
+      return asText(MCP_SSE ? { ...result, progress: { sse: true, token: progressToken !== undefined, beats } } : result);
     },
   );
 
@@ -1689,7 +1708,8 @@ async function handleMcp(req, res, origins) {
   const server = createServer({ readonlyTools: accountReadonlyTools(account), account });
   // stateless + JSON 応答。状態は /room と /state にあるので、transport は
   // 毎回新しくてよい。curl でも読みやすい。
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+  // WORLD_MCP_SSE=1 なら、返事を流れる形(SSE)で返す ── 待つあいだ、進み具合の通知(progress)を途中で流せる。
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: !MCP_SSE });
   res.on("close", () => {
     transport.close();
     server.close();

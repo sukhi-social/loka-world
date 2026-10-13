@@ -243,3 +243,46 @@ test("validate: wait の形を、動かす前に確かめる", () => {
   assert.throws(() => validate([{ wait: { tool: "poll", until: { ref: "x" } } }], () => "呼べない"), /呼べない/);
   assert.throws(() => validate([{ wait: { seconds: -1 } }], ok), /seconds か tool/);
 });
+
+test("wait: beat があれば、待つあいだ beatMs ごとに呼ぶ(呼び手の時計を巻き戻すための進み具合)", async () => {
+  let t = 0;
+  const beats = [];
+  const out = await runFlow([{ id: "w", wait: { seconds: 25 } }], call, {
+    now: () => t,
+    sleep: async (ms) => { t += ms; },
+    beat: async () => beats.push(t),
+    beatMs: 10_000,
+  });
+  assert.equal(out.ok, true);
+  assert.deepEqual(beats, [10_000, 20_000, 25_000]);
+});
+
+test("wait: poll の間(every)も、beat で区切る。beat が無ければ、これまでどおり一度に眠る", async () => {
+  let t = 0;
+  const sleeps = [];
+  const sleep = async (ms) => { sleeps.push(ms); t += ms; };
+  const never = { ref: "w.result.n", gt: 99 };
+  await runFlow([{ id: "w", wait: { tool: "num", args: { n: 1 }, until: never, every: 25, timeout: 30 } }], call, { now: () => t, sleep });
+  assert.deepEqual(sleeps, [25, 5].map((s) => s * 1000));
+
+  t = 0;
+  sleeps.length = 0;
+  let beats = 0;
+  await runFlow([{ id: "w", wait: { tool: "num", args: { n: 1 }, until: never, every: 25, timeout: 30 } }], call, {
+    now: () => t, sleep, beat: async () => { beats++; }, beatMs: 10_000,
+  });
+  assert.deepEqual(sleeps, [10_000, 10_000, 5_000, 5_000]);
+  assert.equal(beats, 4);
+});
+
+test("wait: 呼び手が切れたら、beat の区切りの途中でもやめる", async () => {
+  const ac = new AbortController();
+  let n = 0;
+  await runFlow([{ id: "w", wait: { seconds: 100 } }], call, {
+    sleep: async () => { if (++n === 2) ac.abort(); },
+    signal: ac.signal,
+    beat: async () => {},
+    beatMs: 10_000,
+  });
+  assert.equal(n, 2);
+});
