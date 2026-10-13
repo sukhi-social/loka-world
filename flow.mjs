@@ -1,6 +1,6 @@
 // run_flow の中身。道具の名前と引数を並べた流れを、上から順に動かす。
 //
-//   steps: [{ id?, tool, args?, when?, on_error? }]
+//   steps: [{ id?, tool, args?, when?, on_error?, accept? }]
 //          [{ id?, wait: { ... }, when?, on_error? }]      条件が整うまで待つ(下)
 //
 //   id        手順の名前。あとの手順から ${id.result.xxx} / ${id.ok} / ${id.error} で結果を使える。
@@ -10,6 +10,7 @@
 //               { ref: "a.result.events", nonempty: true }   … 空でない配列・文字列・オブジェクトなら
 //               { all: [...] } / { any: [...] } / { not: {...} }
 //   on_error  "stop"(既定: そこで止まる)か "continue"(失敗を記録して先へ。次の when で受ける)。
+//   accept    L5 の道具の下書きを、実行にする印 { id, hash }(中身は outgoing.mjs。flow は step ごと call に渡すだけ)。
 //
 //   wait      条件が整うまで、能動的に待つ。
 //               { seconds: 20 }                           … ただ待つ
@@ -87,7 +88,7 @@ export function check(cond, ctx) {
 }
 
 // 動かす前に、形を確かめる。ひとつも動かさずに断れるものは、ここで断る。
-export function validate(steps, canCall) {
+export function validate(steps, canCall, canWait = canCall) {
   if (!Array.isArray(steps) || steps.length === 0) throw new Error("steps が空");
   if (steps.length > MAX_STEPS) throw new Error(`手順は ${MAX_STEPS} まで`);
   const seen = new Set();
@@ -104,7 +105,7 @@ export function validate(steps, canCall) {
         return;
       }
       if (!w.until) throw new Error(`手順 ${id}: wait に tool を書くなら、until(条件)が要る`);
-      const why = canCall(w.tool);
+      const why = canWait(w.tool);
       if (why) throw new Error(`手順 ${id}: ${why}`);
       return;
     }
@@ -202,7 +203,7 @@ export async function runFlow(steps, call, env = {}) {
         done.push({ ...entry, status: wait.satisfied ? "ok" : "timed_out", wait, ...(result !== undefined ? { result } : {}) });
         continue;
       }
-      const result = await call(step.tool, resolve(step.args ?? {}, ctx));
+      const result = await call(step.tool, resolve(step.args ?? {}, ctx), step);
       ctx[id] = { ok: true, result };
       done.push({ ...entry, status: "ok", result });
     } catch (err) {

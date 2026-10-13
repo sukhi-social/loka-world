@@ -40,13 +40,16 @@ import { withManners } from "./sukhi_manners.mjs";
 import { commitInbox, readInbox } from "./sukhi_ear.mjs";
 import { startAllEars } from "./sukhi_ears.mjs";
 import { readonlyTools as accountReadonlyTools } from "./settings.mjs";
+import { join } from "node:path";
+import { STATE_DIR } from "./paths.mjs";
 import { state } from "./state.mjs";
 import * as zulip from "./zulip.mjs";
 import { withToolContext } from "./tool-context.mjs";
 import { addWatch, listWatches, stopWatch, takeWatch, tickWatches, watchAccounts, watchContext } from "./watch.mjs";
 import { BODY_QUESTIONS, TSUBUYAKI_MAX, karadaniKiku } from "./body.mjs";
 import { catalog, catalogInput } from "./catalog.mjs";
-import { CONFIRM_ALWAYS, flowRefusal, isDirect, LEVELS, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
+import { handle as handleOutgoing } from "./outgoing.mjs";
+import { CONFIRM_ALWAYS, flowRefusal, isDirect, LEVELS, needsReview, waitRefusal, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
 import { originOf, sendJson } from "./web.mjs";
 
 const asText = (value) => {
@@ -131,6 +134,9 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
 
   // run_flow が名前で呼べるように、素の handler(結果のあとに context を足す前のもの)を覚えておく。
   const registry = new Map();
+
+  // 外に出す前の下書き(L5)の預かり場所。アカウントごと。
+  const pendingDir = join(STATE_DIR, "users", account, "pending");
 
   const reg = (name, config, handler) => {
     registry.set(name, { handler, schema: z.object(config.inputSchema ?? {}), description: config.description ?? "" });
@@ -248,7 +254,10 @@ HTML を書くときは、まず library/loka-design.md を読むと、loka の�
   道具は、run_flow の手順に名前を書いて呼びます。一手だけでも、そのまま呼べます:
     run_flow({ steps: [{ tool: "get_pomodoro" }] })
   以下の「できること」に並ぶ名前は、どれも run_flow から呼ぶ道具の名前です。
-  ただし、外に出る L5(sukhi_post など)と、Mac を触る L7 は、二段(下書き → accept)ができるまで、直接呼びます。
+  外に出る L5(sukhi_post など)は、書いても、すぐには出ません。検査して、預かります(pending)。
+  返事の id と hash を読んで、同じ手順に accept: { id, hash } を足して呼びなおすと、一回だけ出ます。
+  検査で止まったもの(held)は、理由を読んで、直して、下書きからやりなおします。
+  Mac を触る L7 だけは、二段ができるまで、直接呼びます。
 
 ペースの作法は、skill_loka_pace に書いてあります。
 Claude Code などで、すでに loka-pace の skill を読んでいるなら、呼ばなくて大丈夫です。
@@ -614,7 +623,9 @@ ${closing}
       description:
         "道具を、順に呼ぶ流れ。手順の結果を次に渡せて、失敗したときや条件で、道筋を分けられる。" +
         "loka の道具は、ここから名前で呼ぶ(一覧と引数の形は loka_tools)。run_flow 自身と welcome は呼べない。" +
-        `L5(出す)と L7(Mac)は、二段(下書き → accept)ができるまで、まだ直接呼ぶ。手順は ${MAX_STEPS} まで。\n` +
+        "L5(出す)の道具は、書いても実行せず、検査して預かる(status: pending か held)。pending の返事にある id と hash を読んで、" +
+        "同じ手順に accept: { id, hash } を足して呼びなおすと、一回だけ実行される(引数を変えたらやりなおし。期限は 15 分)。held は検査で止まったもので、accept できない。" +
+        `L7(Mac)は、二段ができるまで、まだ直接呼ぶ。手順は ${MAX_STEPS} まで。\n` +
         "各手順: { id?, tool, args?, when?, on_error? }\n" +
         "  id … 手順の名前。あとから ${id.result.xxx}(結果)/ ${id.ok}(成功したか)/ ${id.error}(失敗の理由)で使う。省くと s1, s2 …。\n" +
         "  when … 合わなければ、その手順は飛ばす。{ ref: \"a.ok\" } / { ref: \"a.result.n\", gt: 3 }(eq ne gt lt contains exists)/ { all: [...] } { any: [...] } { not: {...} }。\n" +
@@ -655,6 +666,10 @@ ${closing}
               args: z.record(z.string(), z.unknown()).optional().describe("道具の引数。文字列の ${...} で前の結果を使える。"),
               when: z.record(z.string(), z.unknown()).optional().describe("条件。合わなければ飛ばす。"),
               on_error: z.enum(["stop", "continue"]).optional().describe("失敗したとき。既定は stop。"),
+              accept: z
+                .object({ id: z.string().max(40), hash: z.string().max(80) })
+                .optional()
+                .describe("L5 の下書きを実行にする印。下書きの返事にある id と hash を、同じ手順(道具と引数は同じ)に足す。"),
             }),
           )
           .min(1)
@@ -662,8 +677,12 @@ ${closing}
       },
     },
     async ({ steps }, extra) => {
-      validate(steps, flowRefusal);
-      const call = (name, args) => runTool(name, args, extra);
+      validate(steps, flowRefusal, waitRefusal);
+      // L5(外に出す)は、実行せずに預かって検査する。accept つきで呼びなおしたときだけ、実行する(outgoing.mjs)。
+      const call = (name, args, step) =>
+        needsReview(name)
+          ? handleOutgoing(name, args, step?.accept, { dir: pendingDir, run: () => runTool(name, args, extra) })
+          : runTool(name, args, extra);
       // 呼び手が切れたら(extra.signal)待つのをやめる。待てる合計は流れ全体で決まっている。
       return asText(await runFlow(steps, call, { signal: extra?.signal, budgetMs: flowBudgetSeconds() * 1000 }));
     },
