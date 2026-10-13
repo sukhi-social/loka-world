@@ -12,7 +12,7 @@
 
 export const LEVELS = {
   welcome: 1, skill_loka_pace: 1, read_diary_entry: 1, list_diary_entries: 1,
-  get_current_time: 1, get_focus_status: 1, get_status: 1, list_tasks: 1, get_rhythm_log: 1, job_status: 1, get_pomodoro: 1,
+  loka_tools: 1, get_current_time: 1, get_focus_status: 1, get_status: 1, list_tasks: 1, get_rhythm_log: 1, job_status: 1, get_pomodoro: 1,
   list_teams: 1, list_team_members: 1, list_team_files: 1, read_team_file: 1,
   run_mruby_shell: 2, run_flow: 2, write_diary_entry: 2, add_task: 2, complete_task: 2, submit_ticket: 2,
   upload_files: 2,

@@ -44,6 +44,7 @@ import { state } from "./state.mjs";
 import * as zulip from "./zulip.mjs";
 import { withToolContext } from "./tool-context.mjs";
 import { addWatch, listWatches, stopWatch, takeWatch, tickWatches, watchAccounts, watchContext } from "./watch.mjs";
+import { catalog, catalogInput } from "./catalog.mjs";
 import { CONFIRM_ALWAYS, flowRefusal, LEVELS, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
 import { originOf, sendJson } from "./web.mjs";
 
@@ -130,7 +131,7 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
   const registry = new Map();
 
   const reg = (name, config, handler) => {
-    registry.set(name, { handler, schema: z.object(config.inputSchema ?? {}) });
+    registry.set(name, { handler, schema: z.object(config.inputSchema ?? {}), description: config.description ?? "" });
     const level = LEVELS[name] ?? 1;
     const label = LEVEL_LABEL[level];
     // L7(Mac のシェル)は、申告で確認を省けない。
@@ -653,6 +654,17 @@ ${closing}
       // 呼び手が切れたら(extra.signal)待つのをやめる。待てる合計は流れ全体で決まっている。
       return asText(await runFlow(steps, call, { signal: extra?.signal, budgetMs: flowBudgetSeconds() * 1000 }));
     },
+  );
+
+  reg(
+    "loka_tools",
+    {
+      description:
+        "道具の目録。引数なしで、全部の道具の { name, level, summary } を一覧する。level か q(言葉)で絞れる。" +
+        "name を渡すと、その道具のくわしい説明と、引数の形(JSON Schema)が返る。道具は run_flow の手順に書いて呼ぶ。",
+      inputSchema: catalogInput,
+    },
+    async (args) => asText(catalog(registry, args)),
   );
 
   // ── 見張り(watch)──────────────────────────────────────────────────────
