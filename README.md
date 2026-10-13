@@ -224,8 +224,9 @@ A step can wait, actively, for something to be true instead of the caller peekin
 `timed_out` with `${id.wait.satisfied}` false, so later steps branch with `when` (use `on_timeout: "stop"` to stop
 instead). `{ "wait": { "seconds": 20 } }` just waits. `every_ref` lets a tool set the pace: `job_status` says
 when to come back (`next_check_in`), and `every_ref: "w.result.next_check_in"` follows it. The total a flow may wait
-is capped by `WORLD_FLOW_MAX_SECONDS` (default 90, because the site sits behind a proxy that cuts a silent
-response at 100 seconds); a longer wait is a caller that comes back after a pause. A caller that disconnects ends
+is capped by `WORLD_FLOW_MAX_SECONDS` (default 55: Claude's MCP client gave up on a call at about 60 seconds when
+measured on 2026-10-13, and the site also sits behind a proxy that cuts a silent response at 100 seconds); a longer
+wait is a caller that waits the big stretch with a reminder and then comes back to `wait` for the last part. A caller that disconnects ends
 the wait.
 
 Things worth waiting for: sukhi's inbox (DMs, mentions, and notifications such as follows or favourites: `kind`

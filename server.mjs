@@ -586,11 +586,14 @@ ${closing}
   // 道具の名前と引数を並べて、上から順に動かす。手順の結果は、あとの手順から使える。
   // 窓のほかの道具を、名前で呼べる(tools.mjs の flowRefusal)。L5・L7 は、下書きとして検査される(outgoing.mjs)。
 
-  // 能動的に待てる合計。loka.f3liz.casa は Cloudflare の向こうで、返事が 100 秒ないと 524 で切られる。
-  // 長く待ちたいときは、呼ぶ側が間をおいて、もう一度呼ぶ。
+  // 能動的に待てる合計。既定は 55 秒。
+  //   呼ぶ側(Claude の MCP クライアント)が、返事を 60 秒で打ち切る ── 2026-10-13 の実測で、56 秒は通り、65 秒は
+  //   「応答がない」になった(MCP SDK の既定 60000ms と合う。公式の表の claude.ai・Desktop 240 秒とは合わない)。
+  //   そのうえ loka.f3liz.casa は Cloudflare の向こうで、返事が 100 秒ないと 524 で切られる。
+  // 長く待ちたいときは、予約(reminder)で大きな枠を待ち、近づいたら wait を何度かに分けて呼ぶ。
   const flowBudgetSeconds = () => {
-    const n = Number(process.env.WORLD_FLOW_MAX_SECONDS ?? 90);
-    return Number.isFinite(n) && n >= 1 ? n : 90;
+    const n = Number(process.env.WORLD_FLOW_MAX_SECONDS ?? 55);
+    return Number.isFinite(n) && n >= 1 ? n : 55;
   };
 
   const textOf = (r) => (r?.content ?? []).map((c) => c?.text ?? "").join("\n");
@@ -735,7 +738,7 @@ ${closing}
 
   // ── 見張り(watch)──────────────────────────────────────────────────────
   //
-  // 待つことを、loka の時計に預ける。run_flow の wait は、ひとつのリクエストのあいだ(90 秒)しか待てない。
+  // 待つことを、loka の時計に預ける。run_flow の wait は、ひとつのリクエストのあいだ(55 秒)しか待てない。
   // Web の AI は loka から呼び出せないので、日単位で待つには、預けるしかない。
   // 時計が間をおいて読む道具を回し、条件が成り立ったら結果をしまう。AI は、次に来たときの loka_context で気づく。
 
@@ -751,7 +754,7 @@ ${closing}
         '{"name":"DM を待つ","tool":"sukhi","args":{"do":"inbox"},"until":{"ref":"w.result.events","nonempty":true},"every":300,"days":7}\n```\n' +
         "例(休みが開けたら): " +
         '{"name":"休み明け","tool":"pomodoro","args":{"do":"get"},"until":{"ref":"w.result.phase","eq":"work"},"every":60,"days":1}\n' +
-        "待つ間、何度も覗き直さずにすむ。90 秒で足りるなら、run_flow の wait のほうが軽い。",
+        "待つ間、何度も覗き直さずにすむ。55 秒で足りるなら、run_flow の wait のほうが軽い。",
       inputSchema: {
         name: z.string().min(1).max(80).describe("何を待つかの名前。届いたときに、これが見える。"),
         tool: z.string().min(1).describe("見に行く道具の名前(L1 か L6 の、読むだけの道具)。"),
