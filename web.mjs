@@ -96,3 +96,16 @@ export function originOf(req) {
   const proto = isHttps(req) ? "https" : "http";
   return `${proto}://${host}`;
 }
+
+// 流れる返事(SSE)が静かなあいだ、everyMs ごとにコメント行(": keep-alive")を流す。
+// SSE のコメント行は、クライアントが読み飛ばす。途中の通信が「静かだから」と切られるのを防ぐための合図。
+// 返事の頭を送る前や、返事を終えたあとは何も書かない。止めるには、戻り値の関数を呼ぶ(res が閉じても止まる)。
+export function keepAlive(res, everyMs = 15_000) {
+  const timer = setInterval(() => {
+    if (res.headersSent && !res.writableEnded && !res.destroyed) res.write(": keep-alive\n\n");
+  }, everyMs);
+  timer.unref?.();
+  const stop = () => clearInterval(timer);
+  res.once("close", stop);
+  return stop;
+}

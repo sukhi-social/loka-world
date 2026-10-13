@@ -50,10 +50,11 @@ import { BODY_QUESTIONS, TSUBUYAKI_MAX, karadaniKiku } from "./body.mjs";
 import { catalog, catalogInput } from "./catalog.mjs";
 import { handle as handleOutgoing } from "./outgoing.mjs";
 import { CONFIRM_ALWAYS, flowRefusal, isDirect, LEVELS, modernize, needsReview, resolveTool, waitRefusal, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
-import { originOf, sendJson } from "./web.mjs";
+import { keepAlive, originOf, sendJson } from "./web.mjs";
 
 // 試し中: 返事を流れる形(SSE)にして、待つあいだ progress を送る。呼び手の 60 秒の時計が巻き戻るかを見る。
 const MCP_SSE = process.env.WORLD_MCP_SSE === "1";
+const MCP_KEEPALIVE_MS = Math.max(1000, Number(process.env.WORLD_MCP_KEEPALIVE_SECONDS) * 1000 || 15_000);
 
 const asText = (value) => {
   const structured =
@@ -1714,6 +1715,8 @@ async function handleMcp(req, res, origins) {
     transport.close();
     server.close();
   });
+  // 流れる返事(SSE)が静かなあいだ(wait など)、コメント行を流して、途中で切られないようにする。
+  if (MCP_SSE && req.method === "POST") keepAlive(res, MCP_KEEPALIVE_MS);
   try {
     const body = req.method === "POST" ? await readJson(req) : undefined;
     await server.connect(transport);
