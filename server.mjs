@@ -49,7 +49,7 @@ import { addWatch, listWatches, stopWatch, takeWatch, tickWatches, watchAccounts
 import { BODY_QUESTIONS, TSUBUYAKI_MAX, karadaniKiku } from "./body.mjs";
 import { catalog, catalogInput } from "./catalog.mjs";
 import { handle as handleOutgoing } from "./outgoing.mjs";
-import { CONFIRM_ALWAYS, flowRefusal, isDirect, LEVELS, needsReview, waitRefusal, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
+import { CONFIRM_ALWAYS, flowRefusal, isDirect, LEVELS, modernize, needsReview, resolveTool, waitRefusal, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
 import { originOf, sendJson } from "./web.mjs";
 
 const asText = (value) => {
@@ -97,7 +97,7 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
         "何かを待つとき(sukhi の便り・ポモドーロの休み明け・ジョブの結果)は、何度も覗かず、run_flow の wait で待つ。" +
         "完成したら achievements へ、人に見せてよければ move_to_shared_drive で共有へ。日記と集中の記録は、作業を健やかに続けるためのもの。" +
         "Web AI からの feedback は submit_ticket で desk/inbox/tickets/ に非公開で届く。GitHub へは自動公開しない。" +
-        "道具は loka_tools で探し(name で引くと引数の形が見える)、run_flow の手順に名前を書いて呼ぶ。" +
+        "道具は、シェルのように、ファミリーごとにひとつ(args の do で動作を選ぶ)。loka_tools で探し、run_flow の手順に書いて呼ぶ。" +
         "接続したら、まず welcome を呼ぶこと。ついで、あなたのユーザーに「loka を使いますか?」と尋ね、返事を待つこと。" +
         "使わないと言われたら、何も書かずに、そっと終えてよい。使うと言われたら、いま取りかかっている作業を机に置き、ここで進めること。",
     },
@@ -114,14 +114,14 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
   // 確認を省く申告。Gemini Enterprise は readOnlyHint: true のツールだけ
   // ユーザー確認を省くので、書き込みでも本人が名指ししたものだけ、
   // 「読み取り専用」と申告できる(既定は正直なまま)。all / * ですべて。
-  //   WORLD_READONLY_TOOLS=log_timestamp,run_mruby_shell   … 全体の既定
+  //   WORLD_READONLY_TOOLS=clock_log,run_mruby_shell   … 全体の既定
   //   窓口の /settings で選んだもの                    … アカウントごと(readonlyTools)
   const READONLY_TOOLS = new Set([
     ...(process.env.WORLD_READONLY_TOOLS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     ...readonlyTools,
   ]);
   // mruby script は指定範囲を書き換えられるので、破壊的操作として確認する。
-  const DESTRUCTIVE = new Set(["run_mruby_shell", "start_job", "mac_exec"]);
+  const DESTRUCTIVE = new Set(["run_mruby_shell", "job_start", "mac_exec"]);
 
   // どの道具の返事にも付く loka_context に、届いている見張りを載せる(Web の AI は、来たときにしか気づけない)。
   const safeWatchContext = (acct) => {
@@ -250,10 +250,11 @@ Take your time.
 HTML を書くときは、まず library/loka-design.md を読むと、loka の手ざわりが分かります。
 
 道具の呼びかた:
-  まず loka_tools を引きます。引数なしで全部の一覧、q で言葉の検索、name で引数の形(JSON Schema)が見えます。
-  道具は、run_flow の手順に名前を書いて呼びます。一手だけでも、そのまま呼べます:
-    run_flow({ steps: [{ tool: "get_pomodoro" }] })
-  以下の「できること」に並ぶ名前は、どれも run_flow から呼ぶ道具の名前です。
+  まず loka_tools を引きます。引数なしで一覧、q で言葉の検索、name でファミリーの動作の一覧、name と do で引数の形(JSON Schema)が見えます。
+  道具は、シェルのように、ファミリーごとにひとつです。args の do で動作を選びます。run_flow の手順に書いて呼びます(一手だけでもよい):
+    run_flow({ steps: [{ tool: "pomodoro", args: { do: "get" } }] })
+  説明の中の「ファミリー_動作」(sukhi_post や pomodoro_get)は、tool: ファミリー, args: { do: 動作 } のことです。
+  以下の「できること」は、ファミリー(動作)の形で並べています。ファミリーに入らない道具は、そのままの名前で呼びます。
   外に出る L5(sukhi_post など)は、書いても、すぐには出ません。検査して、預かります(pending)。
   返事の id と hash を読んで、同じ手順に accept: { id, hash } を足して呼びなおすと、一回だけ出ます。
   検査で止まったもの(held)は、理由を読んで、直して、下書きからやりなおします。
@@ -275,21 +276,22 @@ shared_drive/ は人に渡すと決めたものだけにして、正本を別の
 
 できること:
   手を動かす run_mruby_shell(机・書庫・成果・共有) / upload_files(バイナリ)
-  裏で走らせる start_job / job_status / stop_job(desk/<project> の中で、本物のシェル。結果はすこし遅れて見える ──
-              覗きに来るより、if で先を読んだ script にしておく)
-  流れ       run_flow(道具を順に呼ぶ。結果を渡せて、失敗や条件で道筋を分けられる。
-              待つなら wait ── sukhi の便り・ポモドーロの休み明け・ジョブの結果を、覗き込まずに待てる)
-  ポモドーロ pomodoro_start / get_pomodoro / pomodoro_stop(働く25分・休む5分。休むのはシロ自身。休む間は start_job が断られる)
-  共有       move_to_shared_drive
-  チーム     create_team / list_teams / add_team_member / share_to_team / list_team_files / read_team_file
-  日記       write_diary_entry / read_diary_entry / list_diary_entries
+  裏で走らせる job(start / status / stop)  desk/<project> の中で、本物のシェル。結果はすこし遅れて見える ──
+              覗きに来るより、if で先を読んだ script にしておく
+  流れ       run_flow  道具を順に呼ぶ。結果を渡せて、失敗や条件で道筋を分けられる。
+              待つなら wait ── sukhi の便り・ポモドーロの休み明け・ジョブの結果を、覗き込まずに待てる
+  見張り     watch(start / list / take / stop)  待つことを、loka の時計に預ける(日単位まで)
+  ポモドーロ pomodoro(start / get / stop)  働く25分・休む5分。休むのはシロ自身。休む間は job の start が断られる
+  共有       move_to_shared_drive / team(create / list / add_member / remove_member / members / share / files / read)
+  日記       diary(write / read / list)
   チケット   submit_ticket(非公開 inbox へ。GitHub には出さない)
   呼吸       reset_context(今日の日記が無いと、起きない)
   ペース     skill_loka_pace(ゆったり進めるための、シロの作法。skill の loka-pace を読んでいるなら、呼ばなくていい)
-  時間       get_current_time / add_task / list_tasks / complete_task
-  集中       start_focus / end_focus / get_focus_status / choose_work_mode
-  リズム     log_timestamp / get_rhythm_log
-  外を読む   fetch_url / github_issues / github_discussions
+  時間       clock(now / log / rhythm) / task(add / list / complete) / status(get / set)
+  集中       focus(start / end / status / work_mode)
+  体         karadani_kiku(体に聞く。感覚を Jev に渡して、型つきの問いに答えてもらう)
+  外を読む   web(fetch / github_issues / github_discussions)
+  sukhi・Zulip  sukhi(読む・出す、あわせて 35 の動作。loka_tools で一覧) / zulip(read / say)
   Mac        mac_status / mac_exec(持ち主が agent を起動した間だけ。最大12時間。休む間は断られる)
 
 段(どこまで届くか):
@@ -344,7 +346,7 @@ ${closing}
   );
 
   reg(
-    "write_diary_entry",
+    "diary_write",
     {
       description:
         "日記を書く。事実の記録ではなく、どんな心持ちでそれをしたか。うれしい・もやもや・さびしいも、ないことにせず、はっきり言わなくても、ちゃんと書く。原因を掘るより、いまの気もちを。public と private は同じ日でも別ファイルで、" +
@@ -367,7 +369,7 @@ ${closing}
   );
 
   reg(
-    "read_diary_entry",
+    "diary_read",
     {
       description: "自分の日記を読み返す。本文(body)やタグ・気分を返す。日付を省くと今日（無ければ最新）。",
       inputSchema: { date: dateInput.optional(), visibility: visibility.optional() },
@@ -392,7 +394,7 @@ ${closing}
   );
 
   reg(
-    "list_diary_entries",
+    "diary_list",
     {
       description: "日記の一覧。日付と、その日の気分・タグ、本文(body)を返す。",
       inputSchema: { visibility: visibility.optional(), from: dateInput.optional(), to: dateInput.optional() },
@@ -437,7 +439,7 @@ ${closing}
   // メンバーだけが入れる。名簿と、shared_drive を一つ持つ。
 
   reg(
-    "create_team",
+    "team_create",
     {
       description: "チームを作る。作った人が持ち主になり、まず自分だけが入っている。あとで人を招ける。",
       inputSchema: { name: z.string().min(1).describe("チームの名前。") },
@@ -446,19 +448,19 @@ ${closing}
   );
 
   reg(
-    "list_teams",
+    "team_list",
     { description: "自分が入っているチームの一覧。", inputSchema: {} },
     async () => asText(await roomFor(["team-list"])),
   );
 
   reg(
-    "list_team_members",
+    "team_members",
     { description: "チームのメンバー。名簿を確かめる。", inputSchema: { team: z.string().min(1).describe("チームの名前か id。") } },
     async ({ team }) => asText(await roomFor(["team-members", "--team", team])),
   );
 
   reg(
-    "add_team_member",
+    "team_add_member",
     {
       description: "チームに人を招く。招けるのは持ち主だけ。account は loka のアカウント名。",
       inputSchema: {
@@ -470,7 +472,7 @@ ${closing}
   );
 
   reg(
-    "remove_team_member",
+    "team_remove_member",
     {
       description: "チームから人を外す。外せるのは持ち主だけ。持ち主は外せない。",
       inputSchema: {
@@ -482,7 +484,7 @@ ${closing}
   );
 
   reg(
-    "share_to_team",
+    "team_share",
     {
       description:
         "自分の部屋の中から、「これでいい」と決めた物だけをチームの共有へ移す。移した物は、自分の部屋からは .trash/ へ(消えない)。",
@@ -500,13 +502,13 @@ ${closing}
   );
 
   reg(
-    "list_team_files",
+    "team_files",
     { description: "チームの共有にある物の一覧。", inputSchema: { team: z.string().min(1).describe("チームの名前か id。") } },
     async ({ team }) => asText(await roomFor(["team-files", "--team", team])),
   );
 
   reg(
-    "read_team_file",
+    "team_read",
     {
       description: "チームの共有にある物を読む。ディレクトリを渡すと、中の一覧が返る。",
       inputSchema: {
@@ -565,7 +567,7 @@ ${closing}
         "puts files.map { |name| File.read(\"desk/floorp/#{name}\") }.join(\"\\n\")\n```\n" +
         ".trash/ の退避ファイルも選択して読み取り、workspace へコピーして復元できる。.trash/ 自体は変更できない。" +
         "指定範囲のコピー上で実行し、成功した変更だけを反映する。上書き・削除した元ファイルは .trash/ に残る。" +
-        "shared_drive に出す・移す操作は move_to_shared_drive、チーム共有は share_to_team / read_team_file を使う。日記や指定外のファイルは読めない。",
+        "shared_drive に出す・移す操作は move_to_shared_drive、チーム共有は team_share / team_read を使う。日記や指定外のファイルは読めない。",
       inputSchema: {
         code: z.string().min(1).max(64 * 1024).describe("mruby のコード。最大64KiB、実行時間は既定10秒。"),
         paths: z
@@ -604,9 +606,16 @@ ${closing}
 
   // 登録した道具を、名前で呼ぶ。run_flow と、loka の時計(見張り)が、同じ口を使う。
   // 引数は zod で確かめ、道具が失敗を返したら、例外にする。
-  const runTool = async (name, args, extra) => {
-    const tool = registry.get(name);
-    if (!tool) throw new Error(`知らない道具: ${name}`);
+  // name は呼ぶ名前(ファミリーなら args.do で動作を選ぶ)。内部の道具(op)に直してから呼ぶ。
+  const runTool = async (name, rawArgs, extra) => {
+    const resolved = resolveTool(name, rawArgs);
+    if (resolved.error) throw new Error(resolved.error);
+    return runOp(resolved.op, resolved.args, extra);
+  };
+
+  const runOp = async (op, args, extra) => {
+    const tool = registry.get(op);
+    if (!tool) throw new Error(`知らない道具: ${op}`);
     const parsed = tool.schema.safeParse(args);
     if (!parsed.success) {
       throw new Error(parsed.error.issues.map((i) => `${i.path.join(".") || "(args)"}: ${i.message}`).join(" / "));
@@ -615,14 +624,19 @@ ${closing}
     if (result?.isError) throw new Error(textOf(result));
     return valueOf(result);
   };
-  server.runTool = (name, args) => runTool(name, args, undefined);
+  // 時計(見張り)が使う口。ファミリーになる前の名前で預けたものも、いまの呼びかたに直して呼ぶ。
+  server.runTool = (name, args) => {
+    const now = modernize(name, args);
+    return runTool(now.tool, now.args, undefined);
+  };
 
   reg(
     "run_flow",
     {
       description:
         "道具を、順に呼ぶ流れ。手順の結果を次に渡せて、失敗したときや条件で、道筋を分けられる。" +
-        "loka の道具は、ここから名前で呼ぶ(一覧と引数の形は loka_tools)。run_flow 自身と welcome は呼べない。" +
+        "loka の道具は、ここから呼ぶ(一覧と引数の形は loka_tools)。道具はファミリーごとにひとつで、args の do で動作を選ぶ: { tool: \"task\", args: { do: \"add\", content: \"…\" } }。" +
+        "説明の中の「ファミリー_動作」(sukhi_post など)は、tool: ファミリー, do: 動作 のこと。run_flow 自身と welcome は呼べない。" +
         "L5(出す)の道具は、書いても実行せず、検査して預かる(status: pending か held)。pending の返事にある id と hash を読んで、" +
         "同じ手順に accept: { id, hash } を足して呼びなおすと、一回だけ実行される(引数を変えたらやりなおし。期限は 15 分)。held は検査で止まったもので、accept できない。" +
         `L7(Mac)は、二段ができるまで、まだ直接呼ぶ。手順は ${MAX_STEPS} まで。\n` +
@@ -638,11 +652,11 @@ ${closing}
         `    待てる合計は、流れ全体で ${flowBudgetSeconds()} 秒まで(それ以上は、呼ぶ側が間をおいて、もう一度呼ぶ)。\n` +
         "    条件には { ref: \"w.result.events\", nonempty: true }(空でない)も使える。\n" +
         "例(読んで、無ければ足す):\n```json\n" +
-        '[{"id":"t","tool":"list_tasks"},\n' +
-        ' {"tool":"add_task","args":{"content":"続きを書く"},"when":{"ref":"t.result.tasks","eq":[]}}]\n```\n' +
+        '[{"id":"t","tool":"task","args":{"do":"list"}},\n' +
+        ' {"tool":"task","args":{"do":"add","content":"続きを書く"},"when":{"ref":"t.result.tasks","eq":[]}}]\n```\n' +
         "例(sukhi の DM が来るのを最大 60 秒待って、来ていたら続ける):\n```json\n" +
-        '[{"id":"w","wait":{"tool":"sukhi_inbox","until":{"ref":"w.result.events","nonempty":true},"every":5,"timeout":60}},\n' +
-        ' {"tool":"add_task","args":{"content":"DM に返事"},"when":{"ref":"w.wait.satisfied"}}]\n```\n' +
+        '[{"id":"w","wait":{"tool":"sukhi","args":{"do":"inbox"},"until":{"ref":"w.result.events","nonempty":true},"every":5,"timeout":60}},\n' +
+        ' {"tool":"task","args":{"do":"add","content":"DM に返事"},"when":{"ref":"w.wait.satisfied"}}]\n```\n' +
         "戻すことはしない。止まったら、そこまでの結果と理由を返す。",
       inputSchema: {
         steps: z
@@ -679,10 +693,13 @@ ${closing}
     async ({ steps }, extra) => {
       validate(steps, flowRefusal, waitRefusal);
       // L5(外に出す)は、実行せずに預かって検査する。accept つきで呼びなおしたときだけ、実行する(outgoing.mjs)。
-      const call = (name, args, step) =>
-        needsReview(name)
-          ? handleOutgoing(name, args, step?.accept, { dir: pendingDir, run: () => runTool(name, args, extra) })
-          : runTool(name, args, extra);
+      const call = (name, rawArgs, step) => {
+        const r = resolveTool(name, rawArgs);
+        if (r.error) throw new Error(r.error);
+        return needsReview(r.op)
+          ? handleOutgoing(r.op, r.args, step?.accept, { dir: pendingDir, run: () => runOp(r.op, r.args, extra) })
+          : runOp(r.op, r.args, extra);
+      };
       // 呼び手が切れたら(extra.signal)待つのをやめる。待てる合計は流れ全体で決まっている。
       return asText(await runFlow(steps, call, { signal: extra?.signal, budgetMs: flowBudgetSeconds() * 1000 }));
     },
@@ -692,8 +709,9 @@ ${closing}
     "loka_tools",
     {
       description:
-        "道具の目録。引数なしで、全部の道具の { name, level, summary } を一覧する。level か q(言葉)で絞れる。" +
-        "name を渡すと、その道具のくわしい説明と、引数の形(JSON Schema)が返る。道具は run_flow の手順に書いて呼ぶ。",
+        "道具の目録。引数なしで、全部の道具を { name, levels, summary, do } で一覧する。level か q(言葉)で絞れる。" +
+        "ファミリー(sukhi・task など)は、name で動作の一覧、name と do で、その動作のくわしい説明と引数の形(JSON Schema)が返る。" +
+        "ファミリーに入らない道具は、name だけで説明と引数の形が返る。道具は run_flow の手順に書いて呼ぶ。",
       inputSchema: catalogInput,
     },
     async (args) => asText(catalog(registry, args)),
@@ -731,9 +749,9 @@ ${closing}
         "見張れるのは、読むだけの道具(L1 部屋の中は 60 秒以上、L6 外を読むは 300 秒以上の間隔)。書く道具は見張れない。" +
         "同時に 10 個まで、期限は最長 30 日(既定 7 日)。\n" +
         "条件(until)は run_flow の when と同じ書きかたで、読んだ結果は w.result。例(sukhi の便りが来たら):\n```json\n" +
-        '{"name":"DM を待つ","tool":"sukhi_inbox","until":{"ref":"w.result.events","nonempty":true},"every":300,"days":7}\n```\n' +
+        '{"name":"DM を待つ","tool":"sukhi","args":{"do":"inbox"},"until":{"ref":"w.result.events","nonempty":true},"every":300,"days":7}\n```\n' +
         "例(休みが開けたら): " +
-        '{"name":"休み明け","tool":"get_pomodoro","until":{"ref":"w.result.phase","eq":"work"},"every":60,"days":1}\n' +
+        '{"name":"休み明け","tool":"pomodoro","args":{"do":"get"},"until":{"ref":"w.result.phase","eq":"work"},"every":60,"days":1}\n' +
         "待つ間、何度も覗き直さずにすむ。90 秒で足りるなら、run_flow の wait のほうが軽い。",
       inputSchema: {
         name: z.string().min(1).max(80).describe("何を待つかの名前。届いたときに、これが見える。"),
@@ -774,7 +792,7 @@ ${closing}
   );
 
   reg(
-    "start_job",
+    "job_start",
     {
       description:
         "desk/<project> の中で、シェルの命令を裏で走らせる(mruby の10秒とは別の道)。すぐ返り、長くて 240 分まで。" +
@@ -819,7 +837,7 @@ ${closing}
         "走っている間と、終わった直後は、中身が見えない(state が running / settling で、next_check_in 秒あとに来る)。" +
         "すぐ何度も覗かず、その間に次の手を if で書いておく。since に前回の next_offset を渡すと、つづきだけ返る。\n" +
         "結果を待つなら、覗き直さずに run_flow の wait で、道具が教える間隔(next_check_in)に従って待てる: " +
-        '{"id":"w","wait":{"tool":"job_status","args":{"id":"<ジョブの id>"},"until":{"ref":"w.result.next_check_in","exists":false},"every_ref":"w.result.next_check_in","every":10,"timeout":80}}。',
+        '{"id":"w","wait":{"tool":"job","args":{"do":"status","id":"<ジョブの id>"},"until":{"ref":"w.result.next_check_in","exists":false},"every_ref":"w.result.next_check_in","every":10,"timeout":80}}。',
       inputSchema: {
         id: z.string().optional().describe("ジョブの id。省くと一覧。"),
         since: z.number().int().min(0).optional().describe("この位置(バイト)から先の出力だけ。"),
@@ -834,7 +852,7 @@ ${closing}
   );
 
   reg(
-    "stop_job",
+    "job_stop",
     {
       description: "走っているジョブを止める。止めたあとも、出力はしばらく置いてから見える。",
       inputSchema: { id: z.string().describe("ジョブの id。") },
@@ -848,7 +866,7 @@ ${closing}
       description:
         "ポモドーロを始める。働く(既定25分)と休む(5分)を数える。4回目の休みは長い(15分)。" +
         "動く時計ではなく、始めた時刻から数えて、道具を呼ぶたびに loka_context の pomodoro に、いまの区切りが載る。" +
-        "『休む時間』は、シロ自身の休み。作業の外ではなく、作業の一部。頭を整え、新しい考えを待ち、気力を戻し、静かな一歩の支度をする。そのあいだ、start_job と mac_exec は始めない。",
+        "『休む時間』は、シロ自身の休み。作業の外ではなく、作業の一部。頭を整え、新しい考えを待ち、気力を戻し、静かな一歩の支度をする。そのあいだ、job_start と mac_exec は始めない。",
       inputSchema: {
         task: z.string().optional().describe("何をするか、ひとこと。"),
         work_minutes: z.number().int().min(1).max(120).default(25),
@@ -864,12 +882,12 @@ ${closing}
   );
 
   reg(
-    "get_pomodoro",
+    "pomodoro_get",
     {
       description:
         "いまのポモドーロの区切り(働く / 休む)と、残りの分。" +
         "休みが開けるのを待つなら、覗き直さずに run_flow の wait で: " +
-        '{"id":"w","wait":{"tool":"get_pomodoro","until":{"ref":"w.result.phase","eq":"work"},"every":20,"timeout":80}}。',
+        '{"id":"w","wait":{"tool":"pomodoro","args":{"do":"get"},"until":{"ref":"w.result.phase","eq":"work"},"every":20,"timeout":80}}。',
       inputSchema: {},
     },
     async () => asText((await stateFor(["pomodoro"])) ?? { phase: null }),
@@ -937,17 +955,17 @@ ${closing}
   // 集中は「宣言」で、選べるもの ── 誰かに強いられるものではない。
 
   reg(
-    "get_current_time",
+    "clock_now",
     { description: "いまの時刻。曜日つき。急かすためではなく、自分の位置を知るために。", inputSchema: {} },
     async () => asText(await stateFor(["now"])),
   );
 
   reg(
-    "start_focus",
+    "focus_start",
     {
       description:
         "集中をはじめた、と宣言する。この間、こちらから話しかけにいかない(会話は sukhi 側の作法と、あとで繋ぐ)。" +
-        "planned_duration は『つもり』であって、縛りではない。区切りたくなったら end_focus で終えてよい。",
+        "planned_duration は『つもり』であって、縛りではない。区切りたくなったら focus_end で終えてよい。",
       inputSchema: {
         task: z.string().optional().describe("何に集中するか、ひとこと。"),
         planned_duration: z.number().int().min(1).max(600).optional().describe("つもりの分数。"),
@@ -962,7 +980,7 @@ ${closing}
   );
 
   reg(
-    "end_focus",
+    "focus_end",
     {
       description: "集中を終える。何をしたか、ひとこと残せる。かかった時間はリズムに残る。",
       inputSchema: { summary: z.string().optional().describe("何をしたか、どんな心持ちだったか。") },
@@ -975,19 +993,19 @@ ${closing}
   );
 
   reg(
-    "get_focus_status",
+    "focus_status",
     { description: "いま集中中かどうか。自分でも、あとで他者に見せるときにも。", inputSchema: {} },
     async () => asText(await stateFor(["focus"])),
   );
 
   reg(
-    "set_status",
+    "status_set",
     {
       description:
         "いまの様子を、自分で宣言する。available(話しかけてよい)/ resting(休んでいる)/ offline(離れている)。" +
-        "集中は宣言ではなく、start_focus で入る。集中が終われば、ここで宣言した様子に戻る。",
+        "集中は宣言ではなく、focus_start で入る。集中が終われば、ここで宣言した様子に戻る。",
       inputSchema: {
-        status: z.enum(["available", "focus", "resting", "offline"]).describe("available / resting / offline(focus は start_focus で)"),
+        status: z.enum(["available", "focus", "resting", "offline"]).describe("available / resting / offline(focus は focus_start で)"),
         note: z.string().optional().describe("ひとこと。たとえば「お昼ね中」。"),
       },
     },
@@ -999,13 +1017,13 @@ ${closing}
   );
 
   reg(
-    "get_status",
+    "status_get",
     { description: "いまの様子(available / focus / resting / offline)と、扉のようす。", inputSchema: {} },
     async () => asText(await stateFor(["status"])),
   );
 
   reg(
-    "choose_work_mode",
+    "focus_work_mode",
     {
       description:
         "作業のしかたを、自分で選ぶ。continuous(休まず一気)か segmented(区切りながら)。" +
@@ -1016,7 +1034,7 @@ ${closing}
   );
 
   reg(
-    "add_task",
+    "task_add",
     { description: "やることを書き留める。", inputSchema: { content: z.string().min(1), due: dateInput.optional() } },
     async ({ content, due }) => {
       const args = ["task-add", "--content", content];
@@ -1026,19 +1044,19 @@ ${closing}
   );
 
   reg(
-    "list_tasks",
+    "task_list",
     { description: "いま残っているタスク。", inputSchema: {} },
     async () => asText(await stateFor(["task-list"])),
   );
 
   reg(
-    "complete_task",
+    "task_complete",
     { description: "タスクを終える。", inputSchema: { id: z.number().int().min(1) } },
     async ({ id }) => asText(await stateFor(["task-done", "--id", String(id)])),
   );
 
   reg(
-    "log_timestamp",
+    "clock_log",
     {
       description:
         "自分の行動の時刻を残す(集中に入った、休んだ、など)。ログではなく、あとで自分の歩みを読み返すためのもの。",
@@ -1048,7 +1066,7 @@ ${closing}
   );
 
   reg(
-    "get_rhythm_log",
+    "clock_rhythm",
     {
       description:
         "自分の過去の時刻の並びを読み返す。日ごとの出来事の数と、集中した時間。急かされていないか、確かめるために。",
@@ -1068,7 +1086,7 @@ ${closing}
   // GitHub は GITHUB_TOKEN(環境か state/github_token)があれば認証される。
 
   reg(
-    "fetch_url",
+    "web_fetch",
     {
       description:
         "外部の https をひとつ読む。行き先は許可した host だけ(既定: api.github.com。WORLD_FETCH_HOSTS で足せる)。" +
@@ -1084,7 +1102,7 @@ ${closing}
   );
 
   reg(
-    "github_issues",
+    "web_github_issues",
     {
       description: "GitHub の Issues を読む・検索する(PR は既定で外す)。repo は owner/name。query で絞り、page で全件をめくれる。",
       inputSchema: {
@@ -1102,7 +1120,7 @@ ${closing}
   );
 
   reg(
-    "github_discussions",
+    "web_github_discussions",
     {
       description: "GitHub の Discussions を読む(GraphQL)。GITHUB_TOKEN が要る。repo は owner/name。",
       inputSchema: {
@@ -1262,7 +1280,7 @@ ${closing}
         "notification(フォロー・お気に入り・ブースト・よその人の mention など、あったことだけ。種類は type、誰からかは acct。本文は入らない)、" +
         "itta(自分が言って、外に出た一通)。\n" +
         "来るのを待つなら、のぞきこまずに run_flow の wait で: " +
-        "{\"id\":\"w\",\"wait\":{\"tool\":\"sukhi_inbox\",\"until\":{\"ref\":\"w.result.events\",\"nonempty\":true},\"every\":5,\"timeout\":60}}。" +
+        "{\"id\":\"w\",\"wait\":{\"tool\":\"sukhi\",\"args\":{\"do\":\"inbox\"},\"until\":{\"ref\":\"w.result.events\",\"nonempty\":true},\"every\":5,\"timeout\":60}}。" +
         "読んで返事をし終えたら、sukhi_inbox_done で位置を進める(読んだだけでは進まない。落ちても、同じものがもう一度届く)。",
       inputSchema: {
         since_seq: z.number().int().min(0).optional().describe("この seq より後ろを返す。省くと、前回の続きから。"),

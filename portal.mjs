@@ -599,7 +599,7 @@ async function teamPage(ref, account, saved) {
           return `<li><a href="${href}">${escapeHtml(e.name)}${isHtml ? " ↗" : ""}</a> <span class="muted">${fmtSize(e.size)}</span></li>`;
         })
         .join("")}</ul>`
-    : `<p class="muted">まだ何もありません。AI が share_to_team で、ここへ移せます。</p>`;
+    : `<p class="muted">まだ何もありません。AI が team_share で、ここへ移せます。</p>`;
   const body = `
   <div class="card">
     <p class="muted">${escapeHtml(data.team)} — みんなで見る共有の部屋。</p>
@@ -815,7 +815,7 @@ export async function handlePortal(req, res, url) {
   }
 
   // ── チーム ─────────────────────────────────────────────────────────────
-  // 作る → 一枚 → 招く。共有への移動は AI の share_to_team が持つ。
+  // 作る → 一枚 → 招く。共有への移動は AI の team_share が持つ。
 
   if (path === "/teams" && req.method === "POST") {
     const form = new URLSearchParams(await readBody(req));

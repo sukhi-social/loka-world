@@ -105,12 +105,12 @@ export function validate(steps, canCall, canWait = canCall) {
         return;
       }
       if (!w.until) throw new Error(`手順 ${id}: wait に tool を書くなら、until(条件)が要る`);
-      const why = canWait(w.tool);
+      const why = canWait(w.tool, w.args);
       if (why) throw new Error(`手順 ${id}: ${why}`);
       return;
     }
     if (!step.tool) throw new Error(`手順 ${id}: tool か wait のどちらかが要る`);
-    const why = canCall(step.tool);
+    const why = canCall(step.tool, step.args);
     if (why) throw new Error(`手順 ${id}: ${why}`);
   });
 }

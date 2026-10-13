@@ -12,7 +12,7 @@ let t = Date.parse("2026-10-12T00:00:00Z");
 const now = () => t;
 const advance = (sec) => (t += sec * 1000);
 const until = { ref: "w.result.events", nonempty: true };
-const spec = (over = {}) => ({ name: "DM を待つ", tool: "sukhi_inbox", until, every: 60, ...over });
+const spec = (over = {}) => ({ name: "DM を待つ", tool: "sukhi", args: { do: "inbox" }, until, every: 60, ...over });
 const file = (a = "kuro") => join(process.env.WORLD_DATA, "state", "watches", `${a}.json`);
 const reset = () => rmSync(join(process.env.WORLD_DATA, "state", "watches"), { recursive: true, force: true });
 
@@ -25,26 +25,26 @@ const run = async (account, tool, args) => (calls.push({ account, tool, args }),
 
 test("預けると、active で保存される。ファイルは自分だけ", () => {
   reset();
-  const w = W.addWatch("kuro", spec({ args: { limit: 5 } }), { now });
-  assert.deepEqual([w.state, w.tool, w.every, w.expires_at], ["active", "sukhi_inbox", 60, new Date(t + 7 * DAY).toISOString()]);
+  const w = W.addWatch("kuro", spec({ args: { do: "inbox", limit: 5 } }), { now });
+  assert.deepEqual([w.state, w.tool, w.every, w.expires_at], ["active", "sukhi", 60, new Date(t + 7 * DAY).toISOString()]);
   assert.equal(statSync(file()).mode & 0o777, 0o600);
   assert.equal(W.listWatches("kuro").length, 1);
 });
 
 test("書く道具・見張りの道具・流れの道具は、見張れない", () => {
   reset();
-  assert.throws(() => W.addWatch("kuro", spec({ tool: "sukhi_follow" })), /L5.*見張りが読めるのは/);
-  assert.throws(() => W.addWatch("kuro", spec({ tool: "watch_start" })), /見張りからは呼ばない/);
+  assert.throws(() => W.addWatch("kuro", spec({ tool: "sukhi", args: { do: "follow" } })), /L5.*見張りが読めるのは/);
+  assert.throws(() => W.addWatch("kuro", spec({ tool: "watch", args: { do: "start" } })), /見張りからは呼ばない/);
   assert.throws(() => W.addWatch("kuro", spec({ tool: "run_flow" })), /見張りからは呼ばない/);
-  assert.throws(() => W.addWatch("kuro", spec({ tool: "sukhi_read_notifications", every: 600 })), /見張りからは呼ばない/);
+  assert.throws(() => W.addWatch("kuro", spec({ tool: "sukhi", args: { do: "read_notifications" }, every: 600 })), /見張りからは呼ばない/);
   assert.throws(() => W.addWatch("kuro", spec({ tool: "nothing_like_this" })), /知らない道具/);
 });
 
 test("間隔の下限: 部屋の中は 60 秒、外を読む道具は 300 秒", () => {
   reset();
   assert.throws(() => W.addWatch("kuro", spec({ every: 30 })), /60 秒以上/);
-  assert.throws(() => W.addWatch("kuro", spec({ tool: "sukhi_unread_count", every: 120 })), /300 秒以上/);
-  assert.doesNotThrow(() => W.addWatch("kuro", spec({ tool: "sukhi_unread_count", every: 300, until: { ref: "w.result.count", gt: 0 } }), { now }));
+  assert.throws(() => W.addWatch("kuro", spec({ tool: "sukhi", args: { do: "unread_count" }, every: 120 })), /300 秒以上/);
+  assert.doesNotThrow(() => W.addWatch("kuro", spec({ tool: "sukhi", args: { do: "unread_count" }, every: 300, until: { ref: "w.result.count", gt: 0 } }), { now }));
 });
 
 test("期限は最長 30 日。条件の形が壊れていたら、預かる前に断る", () => {
@@ -85,9 +85,9 @@ test("条件が成り立ったら fired で結果をしまい、それ以上は�
   reset();
   calls.length = 0;
   events = [{ seq: 7, kind: "dm" }];
-  W.addWatch("kuro", spec({ args: { limit: 5 } }), { now });
+  W.addWatch("kuro", spec({ args: { do: "inbox", limit: 5 } }), { now });
   assert.deepEqual(await W.tickWatches({ accounts: ["kuro"], run, now }), { checked: 1, fired: 1 });
-  assert.deepEqual(calls[0], { account: "kuro", tool: "sukhi_inbox", args: { limit: 5 } });
+  assert.deepEqual(calls[0], { account: "kuro", tool: "sukhi", args: { do: "inbox", limit: 5 } });
   assert.equal(W.listWatches("kuro")[0].state, "fired");
   advance(600);
   assert.equal((await W.tickWatches({ accounts: ["kuro"], run, now })).checked, 0);

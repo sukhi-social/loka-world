@@ -12,7 +12,7 @@ test("外に出る言葉を書く道具には、sukhi で守ることを添え�
 });
 
 test("読む道具・ack・ほかの場所の道具には、添えない", () => {
-  for (const name of ["sukhi_read_home", "sukhi_inbox", "sukhi_ack", "zulip_say", "write_diary_entry"]) {
+  for (const name of ["sukhi_read_home", "sukhi_inbox", "sukhi_ack", "zulip_say", "diary_write"]) {
     assert.equal(withManners(name, "説明"), "説明", name);
   }
 });

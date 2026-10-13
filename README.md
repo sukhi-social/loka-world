@@ -162,11 +162,11 @@ kindly with nyanrus). The MCP tool `skill_loka_pace` (L1, read-only) returns it 
 that have no skills can read it too; `welcome` points to it. Claude Code reads the same file through a
 symlink: `ln -s <this repo>/skills/loka-pace/SKILL.md ~/.claude/skills/loka-pace/SKILL.md`.
 
-## Background jobs (`start_job`)
+## Background jobs (`job_start`)
 
-`start_job` runs a shell command (`sh -c`, so `if` / `&&` / `||` scripts work) inside one
+`job_start` runs a shell command (`sh -c`, so `if` / `&&` / `||` scripts work) inside one
 `desk/<project>` directory and returns at once; `job_status` reads its state and output later, and
-`stop_job` stops it. `git`, `node`, `ruby`, `python3`, `make`, and `gcc` are in the image. The job can
+`job_stop` stops it. `git`, `node`, `ruby`, `python3`, `make`, and `gcc` are in the image. The job can
 write only inside its project directory (Landlock on Linux, `sandbox-exec` on macOS) and has no
 network. A job lasts up to 240 minutes (default 30); two can run at once. It runs in the directory
 itself, not a copy, so build output stays, but files it deletes do not go to `.trash/`.
@@ -179,7 +179,7 @@ and a hint to write the next steps as one script with `if` branches instead of p
 
 ### Runner (rootless Podman)
 
-With `WORLD_RUNNER_SOCK` set and the socket present, `start_job` hands the project to the runner on
+With `WORLD_RUNNER_SOCK` set and the socket present, `job_start` hands the project to the runner on
 the host instead of using the in-container Landlock sandbox. `runner/loka_runner.py` runs as the
 unprivileged host user `lokarun` and speaks only over a Unix socket (`/run/loka-runner/api.sock`,
 group-restricted); the world container never gets the Docker socket. Each job runs in a rootless
@@ -191,7 +191,7 @@ files are copied back when the job ends; files the job deleted are not deleted b
 `network: "registries"` adds a proxy socket to the container, nothing else: only HTTPS `CONNECT` to
 npm, PyPI, GitHub, Julia and JSR hosts (`ALLOWED_SUFFIXES` in the runner) and only to public
 addresses. Use it to install dependencies, then run build and tests in a `network: "none"` job.
-If the runner is not available, `start_job` falls back to the Landlock sandbox (no network).
+If the runner is not available, `job_start` falls back to the Landlock sandbox (no network).
 Install on the host with `WORLD_BOX=rocky@HOST runner/install.sh`.
 
 ## Flows
@@ -200,9 +200,15 @@ Install on the host with `WORLD_BOX=rocky@HOST runner/install.sh`.
 result is available to later steps as `${id.result.x}` / `${id.ok}` / `${id.error}`. `when` skips a
 step unless its condition holds (`ref` with `eq` / `ne` / `gt` / `lt` / `contains` / `exists`, combined
 with `all` / `any` / `not`). `on_error` is `stop` (default) or `continue`, so a later `when` can
-branch on a failure. Only L1 and L2 tools can be called; `run_flow`, `run_mruby_shell`, the diary
-tools, `welcome`, and `upload_files` cannot. Nothing is rolled back: a stopped flow returns what ran
-and why it stopped. The logic lives in `flow.mjs` (`node --test flow.test.mjs`).
+branch on a failure. Tools come in families, one per area, like the shell is one tool for files:
+`{ "tool": "task", "args": { "do": "add", "content": "…" } }`. `args.do` picks the action, and each action has
+its own level (`sukhi` reads at L6 and posts at L5). `loka_tools` lists the families, the actions of one
+family, and the argument schema of one action. In descriptions, `family_action` (`sukhi_post`, `pomodoro_get`)
+means `tool: family, do: action`. `run_flow` and `welcome` cannot be called from a flow, and neither can L7
+(`mac_exec`) yet. An L5 action (anything that goes outside, like `sukhi` `post`) is not run: it is checked and
+kept as a draft (`pending`, or `held` if a check stops it), and runs only when the same step is called again
+with `accept: { id, hash }` from the draft's reply (`outgoing.mjs`). Nothing is rolled back: a stopped flow
+returns what ran and why it stopped. The logic lives in `flow.mjs` (`node --test flow.test.mjs`).
 
 
 ### Waiting (`wait`)
@@ -210,11 +216,11 @@ and why it stopped. The logic lives in `flow.mjs` (`node --test flow.test.mjs`).
 A step can wait, actively, for something to be true instead of the caller peeking again and again:
 
 ```json
-[{"id":"w","wait":{"tool":"sukhi_inbox","until":{"ref":"w.result.events","nonempty":true},"every":5,"timeout":60}},
- {"id":"next","tool":"add_task","args":{"content":"reply to the DM"},"when":{"ref":"w.wait.satisfied"}}]
+[{"id":"w","wait":{"tool":"sukhi","args":{"do":"inbox"},"until":{"ref":"w.result.events","nonempty":true},"every":5,"timeout":60}},
+ {"id":"next","tool":"task","args":{"do":"add","content":"reply to the DM"},"when":{"ref":"w.wait.satisfied"}}]
 ```
 
-`wait` polls a tool (L1/L2, like every flow step) every `every` seconds until `until` holds; `until` is written like
+`wait` polls a tool (not an L5 action, which would make a draft every time) every `every` seconds until `until` holds; `until` is written like
 `when`, and the value just read is `${id.result}`. Running out of time is not a failure: the step ends as
 `timed_out` with `${id.wait.satisfied}` false, so later steps branch with `when` (use `on_timeout: "stop"` to stop
 instead). `{ "wait": { "seconds": 20 } }` just waits. `every_ref` lets a tool set the pace: `job_status` says
@@ -225,7 +231,7 @@ the wait.
 
 Things worth waiting for: sukhi's inbox (DMs, mentions, and notifications such as follows or favourites: `kind`
 `notification` keeps only the type and who, never the text), the pomodoro opening
-(`get_pomodoro`, `phase` becomes `work`), and a job's result (`job_status`). `sukhi_inbox` without `since_seq` reads
+(`pomodoro_get`, `phase` becomes `work`), and a job's result (`job_status`). `sukhi_inbox` without `since_seq` reads
 from where `sukhi_inbox_done` last moved to, so a cron that runs every hour does not read the same messages again;
 call `sukhi_inbox_done` after replying, not after reading.
 
@@ -233,7 +239,7 @@ call `sukhi_inbox_done` after replying, not after reading.
 
 `pomodoro_start` begins 25-minute work / 5-minute rest rounds (the 4th rest is 15 minutes). There is
 no timer process: the phase is computed from the start time and attached to every tool reply as
-`loka_context.pomodoro`. `start_job` is refused during a rest phase; running jobs continue. The rest is Shiro's own
+`loka_context.pomodoro`. `job_start` is refused during a rest phase; running jobs continue. The rest is Shiro's own
 and is not time spent doing nothing: it is for settling the head, recovering energy, calming down,
 and getting ready for a quiet next step. Writing a diary entry or `reset_context` are fine ways to rest.
 

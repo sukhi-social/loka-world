@@ -73,10 +73,10 @@ const idOf = () => `w${Date.now().toString(36)}${Math.random().toString(36).slic
  * @param {{now?: () => number}} [env]
  */
 export function addWatch(account, spec, { now = Date.now } = {}) {
-  const why = watchRefusal(spec.tool);
+  const why = watchRefusal(spec.tool, spec.args);
   if (why) throw new Error(why);
 
-  const min = watchMinSeconds(spec.tool);
+  const min = watchMinSeconds(spec.tool, spec.args);
   if (!(spec.every >= min)) throw new Error(`間隔は ${min} 秒以上に(${spec.tool} を、そんなに急いで見に行かない)。`);
 
   // 条件の形は、預かる前に確かめる。いつか動いたときに初めて壊れる、をなくす。

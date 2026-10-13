@@ -11,18 +11,18 @@
 // server(注釈を付ける)と portal(設定ページに並べる)の、両方がここを見る。
 
 export const LEVELS = {
-  welcome: 1, skill_loka_pace: 1, read_diary_entry: 1, list_diary_entries: 1,
-  loka_tools: 1, get_current_time: 1, get_focus_status: 1, get_status: 1, list_tasks: 1, get_rhythm_log: 1, job_status: 1, get_pomodoro: 1,
-  list_teams: 1, list_team_members: 1, list_team_files: 1, read_team_file: 1,
-  run_mruby_shell: 2, run_flow: 2, write_diary_entry: 2, add_task: 2, complete_task: 2, submit_ticket: 2,
+  welcome: 1, skill_loka_pace: 1, diary_read: 1, diary_list: 1,
+  loka_tools: 1, clock_now: 1, focus_status: 1, status_get: 1, task_list: 1, clock_rhythm: 1, job_status: 1, pomodoro_get: 1,
+  team_list: 1, team_members: 1, team_files: 1, team_read: 1,
+  run_mruby_shell: 2, run_flow: 2, diary_write: 2, task_add: 2, task_complete: 2, submit_ticket: 2,
   upload_files: 2,
-  log_timestamp: 2, set_status: 2, start_focus: 2, end_focus: 2, choose_work_mode: 2,
-  create_team: 2, add_team_member: 2, remove_team_member: 2,
+  clock_log: 2, status_set: 2, focus_start: 2, focus_end: 2, focus_work_mode: 2,
+  team_create: 2, team_add_member: 2, team_remove_member: 2,
   pomodoro_start: 2, pomodoro_stop: 2,
   reset_context: 3,
-  start_job: 4, stop_job: 4,
-  move_to_shared_drive: 5, share_to_team: 5,
-  karadani_kiku: 6, fetch_url: 6, github_issues: 6, github_discussions: 6,
+  job_start: 4, job_stop: 4,
+  move_to_shared_drive: 5, team_share: 5,
+  karadani_kiku: 6, web_fetch: 6, web_github_issues: 6, web_github_discussions: 6,
   sukhi_read_home: 6, sukhi_profile: 6, sukhi_status: 6, sukhi_read_mentions: 6, sukhi_read_notifications: 6, sukhi_unread_count: 6,
   sukhi_post: 5, sukhi_reply: 5, sukhi_say: 5, sukhi_ack: 5,
   zulip_read: 6, zulip_say: 5,
@@ -31,6 +31,81 @@ export const LEVELS = {
   sukhi_inbox: 1, sukhi_inbox_done: 2,
   watch_start: 2, watch_list: 1, watch_take: 2, watch_stop: 2,
   mac_status: 1, mac_exec: 7,
+};
+
+// ── ファミリー ───────────────────────────────────────────────────────────
+//
+// 道具を、ファミリーごとにひとつにまとめて呼ぶ。シェルが、ファイルの読む・書く・並べるを一つにしているのと同じ。
+//   tool: "sukhi", args: { do: "post", text: "…" }
+// 内部の名前(op)は「<ファミリー>_<動作>」(sukhi_post)。段は op ごとに持ち、二段・見張り・wait の判断は op を見て決める。
+// ファミリーに入らない道具は、そのままの名前で呼ぶ(run_flow・run_mruby_shell など)。
+
+export const FAMILIES = {
+  sukhi: "sukhi(fediverse)。読む(timeline・thread・search など)も、出す(post・reply・say など)も、これひとつ。",
+  zulip: "Zulip を読む・言う。",
+  team: "チーム。作る・メンバーやファイルを見る・共有する。",
+  task: "やること。一覧・足す・終える。",
+  focus: "集中。はじめる・終える・いまの状態・働きかたを選ぶ。",
+  pomodoro: "ポモドーロ。はじめる・止める・いまの区切りを見る。",
+  diary: "日記。書く・読む・一覧。",
+  job: "裏で走らせる処理。はじめる・止める・結果を見る。",
+  watch: "見張り。待つことを、loka の時計に預ける。",
+  web: "外を読む。URL と、GitHub の issue・discussion。",
+  clock: "時刻とリズム。いま・時刻の記録・リズムの記録。",
+  status: "いまの状態(ひとこと)。見る・置く。",
+};
+
+export const familyOfOp = (op) => Object.keys(FAMILIES).find((f) => op.startsWith(`${f}_`));
+
+// 呼ぶときの名前。ファミリーに入る道具は { tool: ファミリー, do: 動作 }、入らない道具は { tool: 名前 }。
+export const toolOf = (op) => {
+  const family = familyOfOp(op);
+  return family ? { tool: family, do: op.slice(family.length + 1) } : { tool: op };
+};
+
+// ファミリーの動作の一覧(段、名前の順)。
+export const verbsOf = (family) =>
+  Object.keys(LEVELS)
+    .filter((op) => op.startsWith(`${family}_`))
+    .sort((a, b) => LEVELS[a] - LEVELS[b] || a.localeCompare(b))
+    .map((op) => op.slice(family.length + 1));
+
+// 呼ぶ名前と引数から、内部の道具(op)と、道具に渡す引数を決める。戻り: { op, args } か { error }。
+// do は ${} で埋めず、そのまま書く(動かす前に、段で断れるように)。
+export function resolveTool(tool, args = {}) {
+  if (tool in FAMILIES) {
+    const verbs = verbsOf(tool);
+    const verb = args?.do;
+    if (typeof verb !== "string" || verb.includes("${")) {
+      return { error: `${tool} は args.do で動作を選ぶ(${verbs.join(" / ")})。do は \${} で埋めず、そのまま書く` };
+    }
+    if (!verbs.includes(verb)) return { error: `${tool} に do: "${verb}" は無い。あるのは: ${verbs.join(" / ")}` };
+    const { do: _verb, ...rest } = args;
+    return { op: `${tool}_${verb}`, args: rest };
+  }
+  if (tool in LEVELS) {
+    const family = familyOfOp(tool);
+    if (family) return { error: `${tool} という名前では呼べない。tool: "${family}", args: { do: "${tool.slice(family.length + 1)}", … } で呼ぶ` };
+    return { op: tool, args };
+  }
+  return { error: `知らない道具: ${tool}` };
+}
+
+// ファミリーになる前の名前(見張りに預けたまま残っているもの)を、いまの呼びかたに直す。時計が回すときだけ使う。
+const LEGACY_NAMES = {
+  create_team: "team_create", list_teams: "team_list", add_team_member: "team_add_member", remove_team_member: "team_remove_member",
+  list_team_members: "team_members", list_team_files: "team_files", read_team_file: "team_read", share_to_team: "team_share",
+  list_tasks: "task_list", add_task: "task_add", complete_task: "task_complete",
+  get_focus_status: "focus_status", start_focus: "focus_start", end_focus: "focus_end", choose_work_mode: "focus_work_mode",
+  get_pomodoro: "pomodoro_get", list_diary_entries: "diary_list", read_diary_entry: "diary_read", write_diary_entry: "diary_write",
+  start_job: "job_start", stop_job: "job_stop", fetch_url: "web_fetch", github_issues: "web_github_issues", github_discussions: "web_github_discussions",
+  get_current_time: "clock_now", log_timestamp: "clock_log", get_rhythm_log: "clock_rhythm", get_status: "status_get", set_status: "status_set",
+};
+
+export const modernize = (tool, args = {}) => {
+  const op = LEGACY_NAMES[tool] ?? tool;
+  const family = tool in FAMILIES ? undefined : familyOfOp(op);
+  return family ? { tool: family, args: { do: op.slice(family.length + 1), ...args } } : { tool, args };
 };
 
 // 入口(窓)。MCP の道具として直接呼べるのは、この三つだけ。ほかの道具は、run_flow の手順に名前を書いて呼ぶ。
@@ -47,7 +122,7 @@ export const isDirect = (name) => WINDOWS.has(name) || STILL_DIRECT.has(name);
 
 // 流れから呼べるのは、窓のほかの道具。入れ子にしない(run_flow)・挨拶は窓で受ける(welcome)・
 // L7 は二段ができるまで、まだ直接。
-export const flowRefusal = (name) => {
+const flowRefusalOp = (name) => {
   if (!(name in LEVELS)) return `知らない道具: ${name}`;
   if (name === "run_flow" || name === "welcome") return `${name} は、流れからは呼ばない`;
   if (STILL_DIRECT.has(name)) return `${name} は ${LEVEL_LABEL[LEVELS[name]]} の道具。二段(下書き → accept)ができるまでは、直接呼ぶ`;
@@ -55,8 +130,8 @@ export const flowRefusal = (name) => {
 };
 
 // wait は、同じ道具を何度も呼ぶ。下書きを繰り返し作らないよう、二段の道具(L5)は置かない。
-export const waitRefusal = (name) => {
-  const why = flowRefusal(name);
+const waitRefusalOp = (name) => {
+  const why = flowRefusalOp(name);
   if (why) return why;
   if (needsReview(name)) return `${name} は ${LEVEL_LABEL[LEVELS[name]]} の道具。二段(下書き → accept)の道具は、wait で繰り返し呼ばない`;
   return null;
@@ -68,12 +143,12 @@ export const waitRefusal = (name) => {
 //   sukhi_read_notifications                   … 読んだところまで既読にする(読むだけではない)
 //   run_flow / run_mruby_shell / 日記 / welcome / upload_files … 入れ子にしない・日記は流れ作業にしない・挨拶とバイナリは向かない
 const WATCH_EXCLUDED = new Set([
-  "run_flow", "run_mruby_shell", "write_diary_entry", "read_diary_entry", "list_diary_entries", "welcome", "upload_files",
+  "run_flow", "run_mruby_shell", "diary_write", "diary_read", "diary_list", "welcome", "upload_files",
   "sukhi_read_notifications",
 ]);
 
 // 呼べるなら null、呼べないなら理由。
-export const watchRefusal = (name) => {
+const watchRefusalOp = (name) => {
   if (!(name in LEVELS)) return `知らない道具: ${name}`;
   if (WATCH_EXCLUDED.has(name) || name.startsWith("watch_")) return `${name} は、見張りからは呼ばない`;
   if (LEVELS[name] !== 1 && LEVELS[name] !== 6) {
@@ -83,12 +158,24 @@ export const watchRefusal = (name) => {
 };
 
 // 見張りの間隔の下限(秒)。外のサーバーを叩く道具は、さらにゆっくり。
-export const watchMinSeconds = (name) => (LEVELS[name] === 6 ? 300 : 60);
+export const watchMinSeconds = (tool, args) => {
+  const r = resolveTool(tool, args);
+  return LEVELS[r.op] === 6 ? 300 : 60;
+};
+
+// 呼ぶ名前(tool と args)を受けて、呼べるなら null、呼べないなら理由。
+const viaOp = (check) => (tool, args) => {
+  const r = resolveTool(tool, args);
+  return r.error ?? check(r.op);
+};
+export const flowRefusal = viaOp(flowRefusalOp);
+export const waitRefusal = viaOp(waitRefusalOp);
+export const watchRefusal = viaOp(watchRefusalOp);
 
 export const LEVEL_LABEL = { 1: "L1 読む", 2: "L2 書く", 3: "L3 呼吸", 4: "L4 走らせる", 5: "L5 出す", 6: "L6 外を読む", 7: "L7 Mac を触る" };
 
 export const OPEN_WORLD = new Set([
-  "karadani_kiku", "fetch_url", "github_issues", "github_discussions",
+  "karadani_kiku", "web_fetch", "web_github_issues", "web_github_discussions",
   "sukhi_read_home", "sukhi_profile", "sukhi_status", "sukhi_read_mentions", "sukhi_read_notifications", "sukhi_unread_count",
   "sukhi_post", "sukhi_reply", "sukhi_say", "sukhi_ack",
   "zulip_read", "zulip_say",

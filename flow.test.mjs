@@ -196,8 +196,8 @@ test("wait: ポモドーロが開ける(休みが終わって work になる)の
   const phases = ["rest", "rest", "work"];
   let i = 0;
   const out = await run(
-    [{ id: "w", wait: { tool: "get_pomodoro", until: { ref: "w.result.phase", eq: "work" }, every: 20, timeout: 90 } }, { id: "go", tool: "echo", when: { ref: "w.wait.satisfied" } }],
-    async (tool) => (tool === "get_pomodoro" ? { phase: phases[i++], remaining_minutes: 1 } : { echoed: true }),
+    [{ id: "w", wait: { tool: "pomodoro_get", until: { ref: "w.result.phase", eq: "work" }, every: 20, timeout: 90 } }, { id: "go", tool: "echo", when: { ref: "w.wait.satisfied" } }],
+    async (tool) => (tool === "pomodoro_get" ? { phase: phases[i++], remaining_minutes: 1 } : { echoed: true }),
     clock,
   );
   assert.deepEqual([out.steps.map((s) => s.status), clock.slept], [["ok", "ok"], [20000, 20000]]);

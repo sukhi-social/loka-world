@@ -173,10 +173,10 @@ test("本文の欄が無い道具(絵文字・フォローなど)は、Jev を�
 
 test("Jev に渡すのは本文の欄だけ(道具名と本文)。パスなどは渡さない", async () => {
   let seen;
-  await review("share_to_team", { team: "秘密のチーム", item_path: "desk/秘密.md", note: "見てね" }, {
+  await review("team_share", { team: "秘密のチーム", item_path: "desk/秘密.md", note: "見てね" }, {
     jev: async (state, q) => { seen = state; return jevSays()(state, q); },
   });
-  assert.deepEqual(seen, { tool: "share_to_team", text: "見てね" });
+  assert.deepEqual(seen, { tool: "team_share", text: "見てね" });
 });
 
 test("accept の id が形でない(パスをくぐろうとする)ときは、触らない", async () => {
