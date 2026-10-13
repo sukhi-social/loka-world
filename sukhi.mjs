@@ -40,6 +40,31 @@ const readJson = (path) => {
 
 // ── 表示の形 ──────────────────────────────────────────────────────────────
 
+// sukhi が断ったときに返した理由(本文)を、短くして、エラーの文に添える。
+// 見出しの文(「HTTP 422」)だけでは、何がだめだったのかが分からない。
+const REASON_MAX = 300;
+const reasonOf = (text) => {
+  const t = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (t === "{}" || t === "[]") return "";
+  return t.length > REASON_MAX ? `${t.slice(0, REASON_MAX)}…` : t;
+};
+
+// sukhi の返事の本文。ActivityPlug は context.raw.body に入れるが、HTTP の部品(ky)が先に読み終えていると空になる。
+// そのときは、読み終えた形が cause.data に残っている。
+const bodyOf = (error) => {
+  const raw = error?.context?.raw?.body;
+  if (raw) return raw;
+  const data = error?.cause?.data;
+  return data !== null && typeof data === "object" ? JSON.stringify(data) : data;
+};
+
+// ActivityPlug のエラーに、sukhi が返した理由を添える。
+export function explained(error) {
+  const reason = reasonOf(bodyOf(error));
+  if (reason && typeof error.message === "string" && !error.message.includes(reason)) error.message = `${error.message} 理由: ${reason}`;
+  return error;
+}
+
 // 投稿本文は HTML で来る。ざっくりタグを落として、人が読める形に。
 export function trimHtml(html, limit = 500) {
   const text = String(html ?? "")
@@ -235,9 +260,13 @@ export function createSukhi(voice, persist = () => {}) {
       return await fn(client(), await session());
     } catch (error) {
       const expired = error?.code === "AUTH_REQUIRED" || error?.code === "AUTH_EXPIRED";
-      if (!expired || !voice.refreshToken) throw error;
+      if (!expired || !voice.refreshToken) throw explained(error);
       await refreshAccessToken();
-      return await fn(client(), await session());
+      try {
+        return await fn(client(), await session());
+      } catch (again) {
+        throw explained(again);
+      }
     }
   }
 
@@ -253,7 +282,10 @@ export function createSukhi(voice, persist = () => {}) {
       await refreshAccessToken();
       return api(path, init, true);
     }
-    if (!resp.ok) throw new Error(`${init.method ?? "GET"} ${path}: HTTP ${resp.status}`);
+    if (!resp.ok) {
+      const reason = reasonOf(await resp.text().catch(() => ""));
+      throw new Error(`${init.method ?? "GET"} ${path}: HTTP ${resp.status}${reason ? ` 理由: ${reason}` : ""}`);
+    }
     return resp.json();
   }
 

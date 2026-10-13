@@ -15,6 +15,7 @@ let context = { ancestors: [] };
 let droppedReply = false; // true なら、POST /statuses の返事で in_reply_to_id を落とす(sukhi が存在しない返信先を捨てるのを真似る)
 let original = null; // GET /api/v1/statuses/:id が返す、元の投稿
 let tokenOk = (t) => t === "t"; // 401 を返すかどうかは、テストごとに差し替える
+let refuseStatuses = null; // 文字列なら、POST /api/v1/statuses を 422 とその本文で断る(sukhi の validation を真似る)
 
 const fake = createServer((req, res) => {
   let body = "";
@@ -40,6 +41,7 @@ const fake = createServer((req, res) => {
     if (req.url.startsWith("/api/v1/conversations")) return send(conversations);
     if (req.url.endsWith("/context")) return send(context);
     if (req.method === "GET" && /^\/api\/v1\/statuses\/[^/]+$/.test(req.url)) return original ? send(original) : res.writeHead(404).end("{}");
+    if (req.url === "/api/v1/statuses" && refuseStatuses) return res.writeHead(422, { "content-type": "application/json" }).end(refuseStatuses);
     if (req.url === "/api/v1/statuses") {
       const sent = body ? JSON.parse(body) : {};
       return send({ id: "new", url: "https://x/new", in_reply_to_id: droppedReply ? null : (sent.in_reply_to_id ?? null) });
@@ -345,4 +347,46 @@ test("trimHtml はタグを落として、長ければ切る", () => {
 test.after(() => {
   fake.close();
   rmSync(dir, { recursive: true, force: true });
+});
+
+// ── 断られたとき、sukhi の返した理由を伝える ──────────────────────────────────
+
+test("ActivityPlug の道(post)で 422 なら、sukhi が返した理由を添える", async () => {
+  tokenOk = (t) => t === "t";
+  sukhi = createSukhi(makeVoice());
+  refuseStatuses = JSON.stringify({ error: "validation_failed", details: { visibility: ["is invalid"] } });
+  try {
+    await assert.rejects(() => sukhi.post({ text: "こんにちは", visibility: "unlisted" }), (e) => {
+      assert.match(e.message, /HTTP 422/);
+      assert.match(e.message, /理由: .*validation_failed.*visibility/);
+      return true;
+    });
+  } finally {
+    refuseStatuses = null;
+  }
+});
+
+test("素の fetch の道(say)で 422 なら、同じく理由を添える", async () => {
+  tokenOk = (t) => t === "t";
+  sukhi = createSukhi(makeVoice());
+  refuseStatuses = JSON.stringify({ error: "validation_failed" });
+  conversations = [convo(["nyanrus"], { id: "1", account: { acct: "nyanrus" }, visibility: "direct", content: "<p>やあ</p>" })];
+  try {
+    await assert.rejects(() => say({ text: "はい" }), /HTTP 422 理由: .*validation_failed/);
+  } finally {
+    refuseStatuses = null;
+  }
+});
+
+test("理由が長ければ切る。理由が空なら、何も足さない", async () => {
+  const { explained } = await import("./sukhi.mjs");
+  const long = explained(Object.assign(new Error("HTTP 422."), { context: { raw: { body: "x".repeat(1000) } } }));
+  assert.ok(long.message.length < 400);
+  assert.match(long.message, /…$/);
+  assert.equal(explained(Object.assign(new Error("HTTP 500."), { context: { raw: {} } })).message, "HTTP 500.");
+  assert.equal(explained(new Error("plain")).message, "plain");
+  // 本文が context に無くても、HTTP の部品が読み終えた形(cause.data)から拾う
+  const viaData = explained(Object.assign(new Error("HTTP 422."), { context: { raw: { status: 422 } }, cause: { data: { error: "validation_failed" } } }));
+  assert.match(viaData.message, /理由: \{"error":"validation_failed"\}/);
+  assert.equal(explained(Object.assign(new Error("HTTP 404."), { context: { raw: { body: "{}" } } })).message, "HTTP 404.");
 });
