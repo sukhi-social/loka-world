@@ -33,28 +33,33 @@ export const LEVELS = {
   mac_status: 1, mac_exec: 7,
 };
 
-// run_flow から呼べるのは L1(読む)と L2(書く)だけ。そのうえで、次のものは呼ばない。
-//   run_flow / run_mruby_shell … 入れ子にしない
-//   日記の三つ                 … 日記は、流れ作業にしない
-//   welcome / upload_files     … 挨拶と、バイナリは、流れに向かない
-const FLOW_EXCLUDED = new Set([
-  "run_flow", "run_mruby_shell", "write_diary_entry", "read_diary_entry", "list_diary_entries", "welcome", "upload_files",
-]);
+// 入口(窓)。MCP の道具として直接呼べるのは、この三つだけ。ほかの道具は、run_flow の手順に名前を書いて呼ぶ。
+export const WINDOWS = new Set(["run_flow", "loka_tools", "welcome"]);
 
-// 呼べるなら null、呼べないなら理由。
+// 二段(下書き → accept)ができるまで、直接呼びのまま残すもの。外に出る L5 と、Mac を触る L7。
+// 流れに入れると、確認なしに外へ出てしまうので、段 4・5 で二段に入れたら、この印を外す。
+export const STILL_DIRECT = new Set(Object.keys(LEVELS).filter((name) => LEVELS[name] === 5 || LEVELS[name] === 7));
+
+export const isDirect = (name) => WINDOWS.has(name) || STILL_DIRECT.has(name);
+
+// 流れから呼べるのは、窓のほかの道具。入れ子にしない(run_flow)・挨拶は窓で受ける(welcome)・
+// L5・L7 は二段ができるまで、まだ直接。
 export const flowRefusal = (name) => {
   if (!(name in LEVELS)) return `知らない道具: ${name}`;
-  if (FLOW_EXCLUDED.has(name)) return `${name} は、流れからは呼ばない`;
-  if (LEVELS[name] > 2) return `${name} は ${LEVEL_LABEL[LEVELS[name]]} の道具。流れから呼べるのは L1・L2 まで`;
+  if (name === "run_flow" || name === "welcome") return `${name} は、流れからは呼ばない`;
+  if (STILL_DIRECT.has(name)) return `${name} は ${LEVEL_LABEL[LEVELS[name]]} の道具。二段(下書き → accept)ができるまでは、直接呼ぶ`;
   return null;
 };
 
 // 見張り(watch)が読める道具。loka の時計が、持ち主に代わって、間をおいて何度も呼ぶ。
 // だから、読むだけの道具(L1 部屋の中・L6 外を読む)に絞る。何かを書く道具を、勝手に繰り返さない。
-//   run_flow / 日記 / welcome / upload_files … 流れと同じ理由で呼ばない
 //   見張りの道具そのもの                       … 見張りが見張りを増やさない
 //   sukhi_read_notifications                   … 読んだところまで既読にする(読むだけではない)
-const WATCH_EXCLUDED = new Set([...FLOW_EXCLUDED, "sukhi_read_notifications"]);
+//   run_flow / run_mruby_shell / 日記 / welcome / upload_files … 入れ子にしない・日記は流れ作業にしない・挨拶とバイナリは向かない
+const WATCH_EXCLUDED = new Set([
+  "run_flow", "run_mruby_shell", "write_diary_entry", "read_diary_entry", "list_diary_entries", "welcome", "upload_files",
+  "sukhi_read_notifications",
+]);
 
 // 呼べるなら null、呼べないなら理由。
 export const watchRefusal = (name) => {

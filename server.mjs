@@ -45,7 +45,7 @@ import * as zulip from "./zulip.mjs";
 import { withToolContext } from "./tool-context.mjs";
 import { addWatch, listWatches, stopWatch, takeWatch, tickWatches, watchAccounts, watchContext } from "./watch.mjs";
 import { catalog, catalogInput } from "./catalog.mjs";
-import { CONFIRM_ALWAYS, flowRefusal, LEVELS, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
+import { CONFIRM_ALWAYS, flowRefusal, isDirect, LEVELS, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
 import { originOf, sendJson } from "./web.mjs";
 
 const asText = (value) => {
@@ -93,6 +93,7 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
         "何かを待つとき(sukhi の便り・ポモドーロの休み明け・ジョブの結果)は、何度も覗かず、run_flow の wait で待つ。" +
         "完成したら achievements へ、人に見せてよければ move_to_shared_drive で共有へ。日記と集中の記録は、作業を健やかに続けるためのもの。" +
         "Web AI からの feedback は submit_ticket で desk/inbox/tickets/ に非公開で届く。GitHub へは自動公開しない。" +
+        "道具は loka_tools で探し(name で引くと引数の形が見える)、run_flow の手順に名前を書いて呼ぶ。" +
         "接続したら、まず welcome を呼ぶこと。ついで、あなたのユーザーに「loka を使いますか?」と尋ね、返事を待つこと。" +
         "使わないと言われたら、何も書かずに、そっと終えてよい。使うと言われたら、いま取りかかっている作業を机に置き、ここで進めること。",
     },
@@ -132,6 +133,9 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
 
   const reg = (name, config, handler) => {
     registry.set(name, { handler, schema: z.object(config.inputSchema ?? {}), description: config.description ?? "" });
+    // 入口に出すのは、窓(run_flow・loka_tools・welcome)と、二段ができるまで直接のもの(L5・L7)だけ。
+    // ほかは registry にだけ置き、run_flow の手順に名前を書いて呼ぶ。
+    if (!isDirect(name)) return null;
     const level = LEVELS[name] ?? 1;
     const label = LEVEL_LABEL[level];
     // L7(Mac のシェル)は、申告で確認を省けない。
@@ -238,6 +242,13 @@ Take your time.
 共有に置いた HTML は、人の窓口からアプリとしてそのまま開けます。
 HTML を書くときは、まず library/loka-design.md を読むと、loka の手ざわりが分かります。
 
+道具の呼びかた:
+  まず loka_tools を引きます。引数なしで全部の一覧、q で言葉の検索、name で引数の形(JSON Schema)が見えます。
+  道具は、run_flow の手順に名前を書いて呼びます。一手だけでも、そのまま呼べます:
+    run_flow({ steps: [{ tool: "get_pomodoro" }] })
+  以下の「できること」に並ぶ名前は、どれも run_flow から呼ぶ道具の名前です。
+  ただし、外に出る L5(sukhi_post など)と、Mac を触る L7 は、二段(下書き → accept)ができるまで、直接呼びます。
+
 ペースの作法は、skill_loka_pace に書いてあります。
 Claude Code などで、すでに loka-pace の skill を読んでいるなら、呼ばなくて大丈夫です。
 
@@ -256,7 +267,7 @@ shared_drive/ は人に渡すと決めたものだけにして、正本を別の
   手を動かす run_mruby_shell(机・書庫・成果・共有) / upload_files(バイナリ)
   裏で走らせる start_job / job_status / stop_job(desk/<project> の中で、本物のシェル。結果はすこし遅れて見える ──
               覗きに来るより、if で先を読んだ script にしておく)
-  流れ       run_flow(道具を順に呼ぶ。結果を渡せて、失敗や条件で道筋を分けられる。L1・L2 まで。
+  流れ       run_flow(道具を順に呼ぶ。結果を渡せて、失敗や条件で道筋を分けられる。
               待つなら wait ── sukhi の便り・ポモドーロの休み明け・ジョブの結果を、覗き込まずに待てる)
   ポモドーロ pomodoro_start / get_pomodoro / pomodoro_stop(働く25分・休む5分。休むのはシロ自身。休む間は start_job が断られる)
   共有       move_to_shared_drive
@@ -562,7 +573,7 @@ ${closing}
   // ── 流れ(run_flow)────────────────────────────────────────────────────
   //
   // 道具の名前と引数を並べて、上から順に動かす。手順の結果は、あとの手順から使える。
-  // 呼べるのは L1・L2 の道具だけ(tools.mjs の flowRefusal)。段は混ぜない。
+  // 窓のほかの道具を、名前で呼べる(tools.mjs の flowRefusal)。L5・L7 は、二段ができるまで直接。
 
   // 能動的に待てる合計。loka.f3liz.casa は Cloudflare の向こうで、返事が 100 秒ないと 524 で切られる。
   // 長く待ちたいときは、呼ぶ側が間をおいて、もう一度呼ぶ。
@@ -601,7 +612,8 @@ ${closing}
     {
       description:
         "道具を、順に呼ぶ流れ。手順の結果を次に渡せて、失敗したときや条件で、道筋を分けられる。" +
-        `呼べるのは L1(読む)と L2(書く)の道具だけ。run_mruby_shell・日記・L3 以上は呼べない。手順は ${MAX_STEPS} まで。\n` +
+        "loka の道具は、ここから名前で呼ぶ(一覧と引数の形は loka_tools)。run_flow 自身と welcome は呼べない。" +
+        `L5(出す)と L7(Mac)は、二段(下書き → accept)ができるまで、まだ直接呼ぶ。手順は ${MAX_STEPS} まで。\n` +
         "各手順: { id?, tool, args?, when?, on_error? }\n" +
         "  id … 手順の名前。あとから ${id.result.xxx}(結果)/ ${id.ok}(成功したか)/ ${id.error}(失敗の理由)で使う。省くと s1, s2 …。\n" +
         "  when … 合わなければ、その手順は飛ばす。{ ref: \"a.ok\" } / { ref: \"a.result.n\", gt: 3 }(eq ne gt lt contains exists)/ { all: [...] } { any: [...] } { not: {...} }。\n" +
@@ -609,7 +621,7 @@ ${closing}
         "  wait … tool の代わりに書く。条件が整うまで、能動的に待つ(cron などで、来るのを待ってから動くとき)。\n" +
         "    { seconds: 20 } ただ待つ / { tool, args?, until, every?: 5, every_ref?, timeout?: 30, on_timeout?: \"continue\"|\"stop\" }\n" +
         "    every_ref は、道具が次に来てほしい秒数を教えてくれるとき(job_status の next_check_in)に、それに従う印。のぞきこまず、道具のペースで待てる。\n" +
-        "    every 秒ごとに tool(L1・L2 の道具)を呼び、until(when と同じ書きかた。いま引いた結果は ${id.result})が成り立つまで繰り返す。\n" +
+        "    every 秒ごとに tool を呼び、until(when と同じ書きかた。いま引いた結果は ${id.result})が成り立つまで繰り返す。\n" +
         "    時間切れは失敗ではなく status が timed_out になり、${id.wait.satisfied} が false。続きの手順を when で分ける(止めたいなら on_timeout: \"stop\")。\n" +
         `    待てる合計は、流れ全体で ${flowBudgetSeconds()} 秒まで(それ以上は、呼ぶ側が間をおいて、もう一度呼ぶ)。\n` +
         "    条件には { ref: \"w.result.events\", nonempty: true }(空でない)も使える。\n" +
@@ -629,7 +641,7 @@ ${closing}
               wait: z
                 .object({
                   seconds: z.number().positive().max(3600).optional().describe("ただ待つ秒数(tool を書かないとき)。"),
-                  tool: z.string().optional().describe("繰り返し呼ぶ道具(L1・L2)。"),
+                  tool: z.string().optional().describe("繰り返し呼ぶ道具。"),
                   args: z.record(z.string(), z.unknown()).optional().describe("その道具の引数。"),
                   until: z.record(z.string(), z.unknown()).optional().describe("成り立ったら待つのをやめる条件(when と同じ書きかた)。"),
                   every: z.number().min(1).max(300).optional().describe("呼ぶ間隔の秒数。既定 5。"),
