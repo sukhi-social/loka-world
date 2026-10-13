@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 
-import { BODY_QUESTIONS, buildBody, tainiKiku } from "./body.mjs";
+import { BODY_QUESTIONS, buildBody, karadaniKiku } from "./body.mjs";
 import { call } from "./jev.mjs";
 
 // 偽の Jev。受けた body を覚え、ふりだしに応じた返事をする。
@@ -121,7 +121,7 @@ test("body には、集中の題目もタスクの中身も入らない。数と
 test("体に聞く: 型どおりに答えが返る。Jev に渡す state に秘密が出ていない(偽の Jev)", async () => {
   const jev = await fakeJev((_n, body) => ({ json: answersFor(body) }));
   try {
-    const r = await tainiKiku({ ask: ["kizukare", "shuchu_kireta", "ima_no_heya"], tsubuyaki: "ふう", context }, { key: "k", url: jev.url });
+    const r = await karadaniKiku({ ask: ["kizukare", "shuchu_kireta", "ima_no_heya"], tsubuyaki: "ふう", context }, { key: "k", url: jev.url });
     assert.equal(r.awake, true);
     assert.deepEqual(r.answers.shuchu_kireta, { noul: 0.9 });
     assert.equal(r.answers.ima_no_heya.choice, "yasumu");
@@ -135,18 +135,18 @@ test("体に聞く: 型どおりに答えが返る。Jev に渡す state に秘�
 });
 
 test("鍵なし・落ちている・形がおかしいとき、全部「わからない」(confidence 0)。取り繕わない", async () => {
-  const noKey = await tainiKiku({ ask: ["kizukare"], context }, { key: "" });
+  const noKey = await karadaniKiku({ ask: ["kizukare"], context }, { key: "" });
   assert.equal(noKey.awake, false);
   assert.deepEqual(noKey.answers.kizukare, { unknown: true, confidence: 0 });
 
-  const down = await tainiKiku({ ask: ["kizukare", "kurikaeshi"], context }, { key: "k", fetch: async () => ({ ok: false, status: 500 }) });
+  const down = await karadaniKiku({ ask: ["kizukare", "kurikaeshi"], context }, { key: "k", fetch: async () => ({ ok: false, status: 500 }) });
   assert.equal(down.awake, true);
   assert.equal(down.answers.kurikaeshi.confidence, 0);
 
-  const odd = await tainiKiku({ ask: ["kizukare"], context }, { key: "k", fetch: async () => ({ ok: true, json: async () => ({ answers: { kizukare: { type: "noul" } } }) }) });
+  const odd = await karadaniKiku({ ask: ["kizukare"], context }, { key: "k", fetch: async () => ({ ok: true, json: async () => ({ answers: { kizukare: { type: "noul" } } }) }) });
   assert.deepEqual(odd.answers.kizukare, { unknown: true, confidence: 0 });
 });
 
 test("知らない問いは、知らないと言う", async () => {
-  await assert.rejects(() => tainiKiku({ ask: ["nothing"], context }), /知らない問い/);
+  await assert.rejects(() => karadaniKiku({ ask: ["nothing"], context }), /知らない問い/);
 });

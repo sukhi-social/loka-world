@@ -75,7 +75,7 @@ const shape = (a) => {
 
 // ask: 問いの名前の配列。戻り: { awake, answers: { 名前: 答え }, message? }。
 // 鍵が無い・Jev が落ちている・間に合わないときは、例外にせず、全部「わからない」で返す。
-export async function tainiKiku({ ask, tsubuyaki, context }, opts = {}) {
+export async function karadaniKiku({ ask, tsubuyaki, context }, opts = {}) {
   const unknownNames = ask.filter((n) => !(n in BODY_QUESTIONS));
   if (unknownNames.length) throw new Error(`知らない問い: ${unknownNames.join(", ")}`);
 

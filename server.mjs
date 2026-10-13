@@ -44,7 +44,7 @@ import { state } from "./state.mjs";
 import * as zulip from "./zulip.mjs";
 import { withToolContext } from "./tool-context.mjs";
 import { addWatch, listWatches, stopWatch, takeWatch, tickWatches, watchAccounts, watchContext } from "./watch.mjs";
-import { BODY_QUESTIONS, TSUBUYAKI_MAX, tainiKiku } from "./body.mjs";
+import { BODY_QUESTIONS, TSUBUYAKI_MAX, karadaniKiku } from "./body.mjs";
 import { catalog, catalogInput } from "./catalog.mjs";
 import { CONFIRM_ALWAYS, flowRefusal, isDirect, LEVELS, LEVEL_LABEL, OPEN_WORLD } from "./tools.mjs";
 import { originOf, sendJson } from "./web.mjs";
@@ -681,7 +681,7 @@ ${closing}
   );
 
   reg(
-    "taini_kiku",
+    "karadani_kiku",
     {
       description:
         "体に聞く。いまの感覚(時刻・集中・ポモドーロ・タスクの数)を Jev に渡して、型つきの問いに答えてもらう。" +
@@ -694,7 +694,7 @@ ${closing}
         tsubuyaki: z.string().max(TSUBUYAKI_MAX).optional().describe("体に向けて置く、短い一文(任意)。自分で出したものだけ。考えの流れ全部は渡さない。"),
       },
     },
-    async ({ ask, tsubuyaki }) => asText(await tainiKiku({ ask, tsubuyaki, context: await stateFor(["context"]) })),
+    async ({ ask, tsubuyaki }) => asText(await karadaniKiku({ ask, tsubuyaki, context: await stateFor(["context"]) })),
   );
 
   // ── 見張り(watch)──────────────────────────────────────────────────────
