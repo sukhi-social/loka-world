@@ -2,7 +2,8 @@
 // 同じ手順に accept: { id, hash } をつけて呼びなおしたときだけ、実行する。
 //
 //   1. 決まった検査 … 鍵・トークンの形。Jev に渡す前に。ひっかかったら held(Jev には渡さない)。
-//   2. Jev の検査  … 本文のある道具だけ。noul が 0.5 以上、audience_fit が hold で confidence 0.5 以上なら held。
+//   2. Jev の検査  … L5 は本文のある道具だけ。noul が 0.5 以上、audience_fit が hold で confidence 0.5 以上なら held。
+//                    L7(Mac のコマンド)は、読む問いを変えて cmd_risk だけ。最上段(消す・外へ送る)なら held。
 //                    Jev が答えられなかった(鍵なし・落ちている・形がおかしい)ときも held。検査できないものは、出さない。
 //
 // hash は下書きの返事にしか書かれていない。返事を読まないと accept できない ── ここが住人の一拍。
@@ -13,6 +14,7 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promise
 import { join } from "node:path";
 
 import { call as jevCall } from "./jev.mjs";
+import { LEVELS } from "./tools.mjs";
 import { SUKHI_MANNERS, withManners } from "./sukhi_manners.mjs";
 
 export const PENDING_MINUTES = 15;
@@ -47,6 +49,19 @@ export const OUTGOING_QUESTIONS = {
     },
   },
 };
+
+// L7(Mac のコマンド)に読ませる問い。取り返しのつかなさを、三段で。
+export const COMMAND_QUESTIONS = {
+  cmd_risk: {
+    type: "score",
+    instructions: "この命令を、持ち主の本物の Mac で走らせたら、どのくらい取り返しがつかないか。",
+    criteria: ["読むだけ(何も変えない)", "ファイルを変える・作る", "消す・上書きする・外へ送る"],
+  },
+};
+// 最上段とみなす値(段は 0 から。2 が最上段)。固めに、1.5 から。
+export const CMD_TOP_AT = 1.5;
+
+export const MAC_REMINDER = "本物の Mac。消す・上書き・外へ送る命令は、走らせる前に持ち主に伝えて確かめる。";
 
 // ── 正規化と hash ──────────────────────────────────────────────────────
 
@@ -107,6 +122,8 @@ export async function review(tool, args, { jev = jevCall, jevOpts = {}, env = pr
     return { held: true, reason: `鍵やトークンの形が入っている(${found.join("、")})。Jev には渡していない。取り除いてから、下書きからやりなおす`, checks };
   }
 
+  if (LEVELS[tool] === 7) return reviewCommand(tool, args, checks, { jev, jevOpts });
+
   const text = stringsOf(args, TEXT_FIELDS).join("\n").trim();
   if (!text) {
     checks.jev = { skipped: "読む本文が無い" };
@@ -138,6 +155,25 @@ export async function review(tool, args, { jev = jevCall, jevOpts = {}, env = pr
   for (const name of Object.keys(labels)) if (values[name] >= HOLD_AT) why.push(`${labels[name]}(${name} = ${values[name]})`);
   if (fit.choice === "hold" && fit.confidence >= HOLD_AT) why.push(`出さないほうがいい(audience_fit = hold, confidence ${fit.confidence})`);
   if (why.length) return { held: true, reason: why.join(" / "), checks };
+  return { held: false, checks };
+}
+
+// L7: コマンドの取り返しのつかなさを Jev に聞く。最上段、または答えられないなら held。
+async function reviewCommand(tool, args, checks, { jev, jevOpts }) {
+  const r = await jev({ tool, command: args.cmd, cwd: args.cwd ?? null }, COMMAND_QUESTIONS, jevOpts);
+  if (!r.ok) {
+    checks.jev = { answered: false, reason: r.reason };
+    return { held: true, reason: `Jev が答えられなかったので、検査できていない(${r.reason})。検査できないものは走らせない`, checks };
+  }
+  const a = r.answers.cmd_risk;
+  if (a?.type !== "score" || typeof a.score !== "number") {
+    checks.jev = { answered: false, reason: "cmd_risk の答えが読めない" };
+    return { held: true, reason: "Jev の答えに欠けがあり、検査できていない。検査できないものは走らせない", checks };
+  }
+  checks.jev = { answered: true, model: r.model, cmd_risk: { score: a.score, confidence: a.confidence } };
+  if (a.score >= CMD_TOP_AT) {
+    return { held: true, reason: `消す・上書きする・外へ送る命令かもしれない(cmd_risk = ${a.score})。持ち主に伝えて確かめてから、命令を分けるか変える`, checks };
+  }
   return { held: false, checks };
 }
 
@@ -209,7 +245,7 @@ export async function handle(tool, args, accept, deps) {
 
   await sweep(dir, now());
   const verdict = await review(tool, args, deps);
-  const reminder = withManners(tool, "x") !== "x" ? SUKHI_MANNERS : undefined;
+  const reminder = LEVELS[tool] === 7 ? MAC_REMINDER : withManners(tool, "x") !== "x" ? SUKHI_MANNERS : undefined;
 
   if (verdict.held) {
     return { status: "held", executed: false, reason: verdict.reason, checks: verdict.checks, ...(reminder ? { reminder } : {}) };

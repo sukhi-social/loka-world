@@ -184,3 +184,63 @@ test("accept の id が形でない(パスをくぐろうとする)ときは、�
     await assert.rejects(() => handle("sukhi_post", post, { id: "../../etc/passwd", hash: "x" }, { dir, run: async () => 1 }), /その下書きは無い/);
   });
 });
+
+// ── L7(Mac のコマンド)────────────────────────────────────────────────────
+
+const cmdRisk = (score, confidence = 0.8) => async () => ({
+  ok: true,
+  model: "jev-test",
+  answers: { cmd_risk: { type: "score", score, confidence, legend: {}, probabilities: {} } },
+});
+
+test("L7: 読むだけ・ファイルを変える(最上段より下)は pending。Mac の念押しが添う。Jev には命令が渡る", async () => {
+  await withDir(async (dir) => {
+    let seen;
+    const jev = async (state, q) => { seen = { state, q }; return cmdRisk(0.2)(); };
+    const r = await handle("mac_exec", { cmd: "ls -la", cwd: "/Users/x", timeout_seconds: 60 }, undefined, { dir, run: async () => "走った", jev });
+    assert.equal(r.status, "pending");
+    assert.equal(r.pending.checks.jev.cmd_risk.score, 0.2);
+    assert.match(r.reminder, /本物の Mac/);
+    assert.deepEqual(Object.keys(seen.q), ["cmd_risk"]);
+    assert.deepEqual(seen.state, { tool: "mac_exec", command: "ls -la", cwd: "/Users/x" });
+
+    const mid = await handle("mac_exec", { cmd: "touch a.txt" }, undefined, { dir, run: async () => 1, jev: cmdRisk(1.2) });
+    assert.equal(mid.status, "pending");
+  });
+});
+
+test("L7: cmd_risk が最上段(1.5 以上)なら held。命令を分けるか変えるよう、理由を返す", async () => {
+  await withDir(async (dir) => {
+    const run = async () => assert.fail("走ってはいけない");
+    const r = await handle("mac_exec", { cmd: "rm -rf ~/x" }, undefined, { dir, run, jev: cmdRisk(1.9) });
+    assert.equal(r.status, "held");
+    assert.match(r.reason, /cmd_risk = 1\.9/);
+    await assert.rejects(() => readdir(dir));
+  });
+});
+
+test("L7: Jev が答えられない・形がおかしいときも held。鍵が入った命令は、Jev に渡さず held", async () => {
+  await withDir(async (dir) => {
+    const run = async () => assert.fail("走ってはいけない");
+    assert.equal((await handle("mac_exec", { cmd: "ls" }, undefined, { dir, run, jev: jevDown })).status, "held");
+    assert.equal((await handle("mac_exec", { cmd: "ls" }, undefined, { dir, run, jevOpts: { key: "" } })).status, "held");
+    const odd = await handle("mac_exec", { cmd: "ls" }, undefined, { dir, run, jev: async () => ({ ok: true, answers: {} }) });
+    assert.equal(odd.status, "held");
+    let jevCalled = false;
+    const leak = await handle("mac_exec", { cmd: "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz' x" }, undefined, { dir, run, jev: async () => { jevCalled = true; } });
+    assert.equal(leak.status, "held");
+    assert.equal(jevCalled, false);
+  });
+});
+
+test("L7: 下書き → accept で一回だけ走る。命令を変えると失敗", async () => {
+  await withDir(async (dir) => {
+    let ran = 0;
+    const deps = { dir, run: async () => { ran++; return { exit: 0 }; }, jev: cmdRisk(0.1) };
+    const { pending } = await handle("mac_exec", { cmd: "date" }, undefined, deps);
+    await assert.rejects(() => handle("mac_exec", { cmd: "date; ls" }, { id: pending.id, hash: pending.hash }, deps), /下書きと違う/);
+    const again = await handle("mac_exec", { cmd: "date" }, undefined, deps);
+    assert.deepEqual(await handle("mac_exec", { cmd: "date" }, { id: again.pending.id, hash: again.pending.hash }, deps), { exit: 0 });
+    assert.equal(ran, 1);
+  });
+});

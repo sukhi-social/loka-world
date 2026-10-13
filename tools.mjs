@@ -53,6 +53,7 @@ export const FAMILIES = {
   web: "外を読む。URL と、GitHub の issue・discussion。",
   clock: "時刻とリズム。いま・時刻の記録・リズムの記録。",
   status: "いまの状態(ひとこと)。見る・置く。",
+  mac: "持ち主の Mac。道が開いているか見る(status)・シェルで命令を走らせる(exec。二段で、検査してから)。",
 };
 
 export const familyOfOp = (op) => Object.keys(FAMILIES).find((f) => op.startsWith(`${f}_`));
@@ -111,25 +112,20 @@ export const modernize = (tool, args = {}) => {
 // 入口(窓)。MCP の道具として直接呼べるのは、この三つだけ。ほかの道具は、run_flow の手順に名前を書いて呼ぶ。
 export const WINDOWS = new Set(["run_flow", "loka_tools", "welcome"]);
 
-// 二段(下書き → accept)ができるまで、直接呼びのまま残すもの。いまは Mac を触る L7 だけ(段 5 で二段に入れたら、この印を外す)。
-// 外に出る L5 は、段 4 で二段に入った(outgoing.mjs)。流れに書くと、下書きとして預かられる。
-export const STILL_DIRECT = new Set(Object.keys(LEVELS).filter((name) => LEVELS[name] === 7));
+// 二段で守る道具。外に出る L5 と、Mac を触る L7。流れの手順に書くと、実行せずに検査して預かる(outgoing.mjs)。
+export const needsReview = (name) => LEVELS[name] === 5 || LEVELS[name] === 7;
 
-// 二段で守る道具(L5)。流れの手順に書くと、実行せずに預かられる。
-export const needsReview = (name) => LEVELS[name] === 5;
+export const isDirect = (name) => WINDOWS.has(name);
 
-export const isDirect = (name) => WINDOWS.has(name) || STILL_DIRECT.has(name);
-
-// 流れから呼べるのは、窓のほかの道具。入れ子にしない(run_flow)・挨拶は窓で受ける(welcome)・
-// L7 は二段ができるまで、まだ直接。
+// 流れから呼べるのは、窓のほかの道具。入れ子にしない(run_flow)・挨拶は窓で受ける(welcome)。
+// 外に出る L5 と Mac の L7 は呼べるが、実行はされず、下書きとして検査される(outgoing.mjs)。
 const flowRefusalOp = (name) => {
   if (!(name in LEVELS)) return `知らない道具: ${name}`;
   if (name === "run_flow" || name === "welcome") return `${name} は、流れからは呼ばない`;
-  if (STILL_DIRECT.has(name)) return `${name} は ${LEVEL_LABEL[LEVELS[name]]} の道具。二段(下書き → accept)ができるまでは、直接呼ぶ`;
   return null;
 };
 
-// wait は、同じ道具を何度も呼ぶ。下書きを繰り返し作らないよう、二段の道具(L5)は置かない。
+// wait は、同じ道具を何度も呼ぶ。下書きを繰り返し作らないよう、二段の道具(L5・L7)は置かない。
 const waitRefusalOp = (name) => {
   const why = flowRefusalOp(name);
   if (why) return why;

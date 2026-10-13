@@ -204,9 +204,8 @@ branch on a failure. Tools come in families, one per area, like the shell is one
 `{ "tool": "task", "args": { "do": "add", "content": "…" } }`. `args.do` picks the action, and each action has
 its own level (`sukhi` reads at L6 and posts at L5). `loka_tools` lists the families, the actions of one
 family, and the argument schema of one action. In descriptions, `family_action` (`sukhi_post`, `pomodoro_get`)
-means `tool: family, do: action`. `run_flow` and `welcome` cannot be called from a flow, and neither can L7
-(`mac_exec`) yet. An L5 action (anything that goes outside, like `sukhi` `post`) is not run: it is checked and
-kept as a draft (`pending`, or `held` if a check stops it), and runs only when the same step is called again
+means `tool: family, do: action`. `run_flow` and `welcome` cannot be called from a flow. An L5 action (anything that goes outside, like `sukhi`
+`post`) or an L7 action (`mac` `exec`) is not run: it is checked and kept as a draft (`pending`, or `held` if a check stops it), and runs only when the same step is called again
 with `accept: { id, hash }` from the draft's reply (`outgoing.mjs`). Nothing is rolled back: a stopped flow
 returns what ran and why it stopped. The logic lives in `flow.mjs` (`node --test flow.test.mjs`).
 
@@ -220,7 +219,7 @@ A step can wait, actively, for something to be true instead of the caller peekin
  {"id":"next","tool":"task","args":{"do":"add","content":"reply to the DM"},"when":{"ref":"w.wait.satisfied"}}]
 ```
 
-`wait` polls a tool (not an L5 action, which would make a draft every time) every `every` seconds until `until` holds; `until` is written like
+`wait` polls a tool (not an L5 or L7 action, which would make a draft every time) every `every` seconds until `until` holds; `until` is written like
 `when`, and the value just read is `${id.result}`. Running out of time is not a failure: the step ends as
 `timed_out` with `${id.wait.satisfied}` false, so later steps branch with `when` (use `on_timeout: "stop"` to stop
 instead). `{ "wait": { "seconds": 20 } }` just waits. `every_ref` lets a tool set the pace: `job_status` says

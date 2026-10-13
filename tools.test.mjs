@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   CHOOSABLE_TOOLS, CONFIRM_ALWAYS, FAMILIES, familyOfOp, flowRefusal, isDirect, LEVELS, modernize, needsReview, OPEN_WORLD,
-  resolveTool, STILL_DIRECT, toolOf, verbsOf, waitRefusal, watchRefusal, WINDOWS,
+  resolveTool, toolOf, verbsOf, waitRefusal, watchRefusal, WINDOWS,
 } from "./tools.mjs";
 
 const viaSukhi = (verb, extra = {}) => ["sukhi", { do: verb, ...extra }];
@@ -35,24 +35,29 @@ test("ふつうに書く道具(フォロー・反応)は、設定ページで選
   for (const name of ["sukhi_follow", "sukhi_interact", "sukhi_react", "sukhi_post"]) assert.ok(CHOOSABLE_TOOLS.includes(name), name);
 });
 
-test("窓は三つ。ほかの道具は、L5・L7 のほかは直接呼べず、run_flow から名前で呼ぶ", () => {
+test("窓は三つ。ほかの道具は直接呼べず、run_flow から呼ぶ", () => {
   assert.deepEqual([...WINDOWS].sort(), ["loka_tools", "run_flow", "welcome"]);
   for (const name of WINDOWS) assert.ok(name in LEVELS, name);
   for (const name of Object.keys(LEVELS)) {
-    const direct = WINDOWS.has(name) || LEVELS[name] === 7;
+    const direct = WINDOWS.has(name);
     assert.equal(isDirect(name), direct, name);
   }
-  assert.deepEqual([...STILL_DIRECT], ["mac_exec"]);
+  assert.deepEqual([...WINDOWS].filter((n) => isDirect(n)).sort(), ["loka_tools", "run_flow", "welcome"]);
 });
 
-test("run_flow から呼べる: シェル・日記・呼吸・ジョブ・外を読む・L5(下書き)。呼べない: 窓の run_flow と welcome、L7", () => {
+test("run_flow から呼べる: シェル・日記・呼吸・ジョブ・外を読む・L5(下書き)。呼べない: 窓の run_flow と welcome。L7(mac exec)は下書きとして呼べる", () => {
   for (const name of ["run_mruby_shell", "upload_files", "reset_context", "loka_tools", "move_to_shared_drive"]) {
     assert.equal(flowRefusal(name, {}), null, name);
   }
   for (const [tool, args] of [["diary", { do: "write" }], ["diary", { do: "read" }], ["job", { do: "start" }], ["web", { do: "fetch" }], viaSukhi("timeline"), viaSukhi("post")]) {
     assert.equal(flowRefusal(tool, args), null, `${tool} ${args.do}`);
   }
-  for (const name of ["run_flow", "welcome", "mac_exec"]) assert.ok(flowRefusal(name, {}), name);
+  for (const name of ["run_flow", "welcome"]) assert.ok(flowRefusal(name, {}), name);
+  assert.equal(flowRefusal("mac", { do: "exec" }), null);
+  assert.ok(needsReview("mac_exec") && !needsReview("mac_status"));
+  assert.ok(waitRefusal("mac", { do: "exec" }));
+  assert.ok(watchRefusal("mac", { do: "exec" }));
+  assert.equal(watchRefusal("mac", { do: "status" }), null);
   assert.match(flowRefusal("nothing", {}), /知らない道具/);
 });
 
@@ -60,7 +65,8 @@ test("ファミリー: 内部の名前は <ファミリー>_<動作>。ファミ
   assert.deepEqual(toolOf("sukhi_inbox_done"), { tool: "sukhi", do: "inbox_done" });
   assert.deepEqual(toolOf("web_github_issues"), { tool: "web", do: "github_issues" });
   assert.deepEqual(toolOf("run_mruby_shell"), { tool: "run_mruby_shell" });
-  assert.deepEqual(toolOf("mac_exec"), { tool: "mac_exec" });
+  assert.deepEqual(toolOf("mac_exec"), { tool: "mac", do: "exec" });
+  assert.deepEqual(toolOf("karadani_kiku"), { tool: "karadani_kiku" });
   // 内部の名前は、どれもひとつのファミリーにだけ属する(前置きが重ならない)
   for (const op of Object.keys(LEVELS)) {
     const owners = Object.keys(FAMILIES).filter((f) => op.startsWith(`${f}_`));
@@ -92,7 +98,7 @@ test("段は動作ごと: sukhi の読む動作は流れ・見張り・wait で�
   assert.ok(watchRefusal(...viaSukhi("post")));
   assert.ok(waitRefusal(...viaSukhi("post")));
   assert.equal(flowRefusal(...viaSukhi("post")), null);
-  assert.ok(flowRefusal("mac_exec", {}));
+  assert.match(flowRefusal("mac_exec", {}), /tool: "mac"/);
 });
 
 test("見張りに預けたままの古い名前は、いまの呼びかたに直る(時計が回すときだけ)", () => {

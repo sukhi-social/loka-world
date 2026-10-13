@@ -121,7 +121,8 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
     ...readonlyTools,
   ]);
   // mruby script は指定範囲を書き換えられるので、破壊的操作として確認する。
-  const DESTRUCTIVE = new Set(["run_mruby_shell", "job_start", "mac_exec"]);
+  // run_flow は、シェルもジョブも Mac も呼べる窓なので、正直に destructive と申告する。
+  const DESTRUCTIVE = new Set(["run_flow", "run_mruby_shell", "job_start", "mac_exec"]);
 
   // どの道具の返事にも付く loka_context に、届いている見張りを載せる(Web の AI は、来たときにしか気づけない)。
   const safeWatchContext = (acct) => {
@@ -140,8 +141,7 @@ export function createServer({ readonlyTools = [], account = ownerAccount() } = 
 
   const reg = (name, config, handler) => {
     registry.set(name, { handler, schema: z.object(config.inputSchema ?? {}), description: config.description ?? "" });
-    // 入口に出すのは、窓(run_flow・loka_tools・welcome)と、二段ができるまで直接のもの(L5・L7)だけ。
-    // ほかは registry にだけ置き、run_flow の手順に名前を書いて呼ぶ。
+    // 入口に出すのは、窓(run_flow・loka_tools・welcome)だけ。ほかは registry にだけ置き、run_flow の手順に書いて呼ぶ。
     if (!isDirect(name)) return null;
     const level = LEVELS[name] ?? 1;
     const label = LEVEL_LABEL[level];
@@ -255,10 +255,9 @@ HTML を書くときは、まず library/loka-design.md を読むと、loka の�
     run_flow({ steps: [{ tool: "pomodoro", args: { do: "get" } }] })
   説明の中の「ファミリー_動作」(sukhi_post や pomodoro_get)は、tool: ファミリー, args: { do: 動作 } のことです。
   以下の「できること」は、ファミリー(動作)の形で並べています。ファミリーに入らない道具は、そのままの名前で呼びます。
-  外に出る L5(sukhi_post など)は、書いても、すぐには出ません。検査して、預かります(pending)。
+  外に出る L5(sukhi_post など)と、Mac を触る L7(mac_exec)は、書いても、すぐには動きません。検査して、預かります(pending)。
   返事の id と hash を読んで、同じ手順に accept: { id, hash } を足して呼びなおすと、一回だけ出ます。
   検査で止まったもの(held)は、理由を読んで、直して、下書きからやりなおします。
-  Mac を触る L7 だけは、二段ができるまで、直接呼びます。
 
 ペースの作法は、skill_loka_pace に書いてあります。
 Claude Code などで、すでに loka-pace の skill を読んでいるなら、呼ばなくて大丈夫です。
@@ -292,7 +291,7 @@ shared_drive/ は人に渡すと決めたものだけにして、正本を別の
   体         karadani_kiku(体に聞く。感覚を Jev に渡して、型つきの問いに答えてもらう)
   外を読む   web(fetch / github_issues / github_discussions)
   sukhi・Zulip  sukhi(読む・出す、あわせて 35 の動作。loka_tools で一覧) / zulip(read / say)
-  Mac        mac_status / mac_exec(持ち主が agent を起動した間だけ。最大12時間。休む間は断られる)
+  Mac        mac(status / exec)  持ち主が agent を起動した間だけ。最大12時間。休む間は断られる。exec は二段
 
 段(どこまで届くか):
   L1 読む      部屋の中を見るだけ
@@ -585,7 +584,7 @@ ${closing}
   // ── 流れ(run_flow)────────────────────────────────────────────────────
   //
   // 道具の名前と引数を並べて、上から順に動かす。手順の結果は、あとの手順から使える。
-  // 窓のほかの道具を、名前で呼べる(tools.mjs の flowRefusal)。L5・L7 は、二段ができるまで直接。
+  // 窓のほかの道具を、名前で呼べる(tools.mjs の flowRefusal)。L5・L7 は、下書きとして検査される(outgoing.mjs)。
 
   // 能動的に待てる合計。loka.f3liz.casa は Cloudflare の向こうで、返事が 100 秒ないと 524 で切られる。
   // 長く待ちたいときは、呼ぶ側が間をおいて、もう一度呼ぶ。
@@ -637,9 +636,9 @@ ${closing}
         "道具を、順に呼ぶ流れ。手順の結果を次に渡せて、失敗したときや条件で、道筋を分けられる。" +
         "loka の道具は、ここから呼ぶ(一覧と引数の形は loka_tools)。道具はファミリーごとにひとつで、args の do で動作を選ぶ: { tool: \"task\", args: { do: \"add\", content: \"…\" } }。" +
         "説明の中の「ファミリー_動作」(sukhi_post など)は、tool: ファミリー, do: 動作 のこと。run_flow 自身と welcome は呼べない。" +
-        "L5(出す)の道具は、書いても実行せず、検査して預かる(status: pending か held)。pending の返事にある id と hash を読んで、" +
+        "L5(出す)と L7(Mac)の動作は、書いても実行せず、検査して預かる(status: pending か held)。pending の返事にある id と hash を読んで、" +
         "同じ手順に accept: { id, hash } を足して呼びなおすと、一回だけ実行される(引数を変えたらやりなおし。期限は 15 分)。held は検査で止まったもので、accept できない。" +
-        `L7(Mac)は、二段ができるまで、まだ直接呼ぶ。手順は ${MAX_STEPS} まで。\n` +
+        `手順は ${MAX_STEPS} まで。\n` +
         "各手順: { id?, tool, args?, when?, on_error? }\n" +
         "  id … 手順の名前。あとから ${id.result.xxx}(結果)/ ${id.ok}(成功したか)/ ${id.error}(失敗の理由)で使う。省くと s1, s2 …。\n" +
         "  when … 合わなければ、その手順は飛ばす。{ ref: \"a.ok\" } / { ref: \"a.result.n\", gt: 3 }(eq ne gt lt contains exists)/ { all: [...] } { any: [...] } { not: {...} }。\n" +
