@@ -6,3 +6,6 @@ state/
 .data/
 __pycache__/
 .DS_Store
+
+# built from skills/loka-pace/ for upload; the source of truth is the folder
+skills/loka-pace.zip
