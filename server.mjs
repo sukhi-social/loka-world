@@ -6,8 +6,9 @@
 // 通すだけ ── 危ない道の見張りも、消さずに .trash/ へ移す作法も、hako の箱に
 // 一つだけある。
 //
-// 三つの面を、一つのプロセスが出す:
+// 四つの面を、一つのプロセスが出す:
 //   /mcp                               AI のための口(stdio でも可)
+//   /ann/call                          アン(svar)の細い口。専用の鍵で、sukhi の四つの動作だけ
 //   /  /shared  /diary/public  /peek   人間の窓口(合鍵 → cookie)
 //   /oauth/*  /.well-known/*           認可(Web の AI のコネクタ登録を通す)
 //
@@ -33,6 +34,7 @@ import { MAX_STEPS, runFlow, validate } from "./flow.mjs";
 import { handleMac, macExec, macStatus } from "./mac.mjs";
 import { handleOAuth } from "./oauth.mjs";
 import { handlePortal } from "./portal.mjs";
+import { handleAnn } from "./ann_http.mjs";
 import { handleVoiceHttp } from "./voice_http.mjs";
 import { room } from "./room.mjs";
 import { sukhiFor } from "./sukhi.mjs";
@@ -630,6 +632,16 @@ ${closing}
     if (result?.isError) throw new Error(textOf(result));
     return valueOf(result);
   };
+  // run_flow の一手と同じ呼びかた。L5 は実行せずに預かって検査し、accept つきのときだけ実行する(outgoing.mjs)。
+  const callStep = (name, rawArgs, accept, extra) => {
+    const r = resolveTool(name, rawArgs);
+    if (r.error) throw new Error(r.error);
+    return needsReview(r.op)
+      ? handleOutgoing(r.op, r.args, accept, { dir: pendingDir, run: () => runOp(r.op, r.args, extra) })
+      : runOp(r.op, r.args, extra);
+  };
+  // アンの入口(ann_http.mjs)が使う口。
+  server.callStep = (name, args, accept) => callStep(name, args, accept, undefined);
   // 時計(見張り)が使う口。ファミリーになる前の名前で預けたものも、いまの呼びかたに直して呼ぶ。
   server.runTool = (name, args) => {
     const now = modernize(name, args);
@@ -699,13 +711,7 @@ ${closing}
     async ({ steps }, extra) => {
       validate(steps, flowRefusal, waitRefusal);
       // L5(外に出す)は、実行せずに預かって検査する。accept つきで呼びなおしたときだけ、実行する(outgoing.mjs)。
-      const call = (name, rawArgs, step) => {
-        const r = resolveTool(name, rawArgs);
-        if (r.error) throw new Error(r.error);
-        return needsReview(r.op)
-          ? handleOutgoing(r.op, r.args, step?.accept, { dir: pendingDir, run: () => runOp(r.op, r.args, extra) })
-          : runOp(r.op, r.args, extra);
-      };
+      const call = (name, rawArgs, step) => callStep(name, rawArgs, step?.accept, extra);
       // 呼び手が切れたら(extra.signal)待つのをやめる。待てる合計は流れ全体で決まっている。
       // 呼び手が progressToken をくれていて、返事が流れる形(SSE)なら、待つあいだ progress を送る。
       const progressToken = extra?._meta?.progressToken;
@@ -1745,6 +1751,10 @@ function readJson(req) {
   });
 }
 
+// アン(svar)の入口が使う道具の口。持ち主の部屋のもの(声はアンのアカウントにつながっている)。
+let annServerInstance = null;
+const annServer = () => (annServerInstance ??= createServer({ account: ownerAccount() }));
+
 async function runHttp() {
   const port = Number(process.env.WORLD_PORT ?? 8790);
   const host = process.env.WORLD_HOST ?? "127.0.0.1";
@@ -1763,6 +1773,8 @@ async function runHttp() {
       if (path.startsWith("/oauth/") || path.startsWith("/.well-known/")) {
         if (await handleOAuth(req, res, url)) return;
       }
+
+      if (await handleAnn(req, res, url, { hostOk: (r) => hosts.has(hostOf(r)), getServer: annServer })) return;
 
       if (path === "/mcp") return handleMcp(req, res, hosts);
 
